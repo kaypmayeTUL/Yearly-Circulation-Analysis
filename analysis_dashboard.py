@@ -1619,21 +1619,52 @@ with tabs["Subjects × LC"]:
             placeholder="e.g. 'Louisiana', 'women', 'public health'",
             key="subjlc_search",
         )
-        pair_display = pairs_df if pick.startswith("All ") \
-            else pairs_df[pairs_df[lc_col] == bucket_labels[pick]]
+        is_all_buckets = pick.startswith("All ")
+        picked_code = None if is_all_buckets else bucket_labels[pick]
+        pair_display = pairs_df if is_all_buckets \
+            else pairs_df[pairs_df[lc_col] == picked_code]
         if pair_search:
             pair_display = pair_display[
                 pair_display["Subject"].str.contains(pair_search, case=False, na=False)
             ]
-        st.dataframe(
-            pair_display.sort_values("Loans", ascending=False),
-            use_container_width=True, hide_index=True,
-        )
-        download_button_for_df(
-            pairs_df, f"⬇ Download subject-by-LC-{noun} CSV",
-            f"subject_by_lc_{noun}_{script.fy_window_slug()}.csv",
-            key="dl_subj_lc",
-        )
+        # Sort for reading and for export: within one bucket, straight loan
+        # ranking; across all buckets, group by bucket first so the CSV opens
+        # as one block per class/subclass rather than an interleaved list.
+        if is_all_buckets:
+            pair_display = pair_display.sort_values(
+                [lc_col, "Loans"], ascending=[True, False]
+            )
+        else:
+            pair_display = pair_display.sort_values("Loans", ascending=False)
+        st.dataframe(pair_display, use_container_width=True, hide_index=True)
+
+        # The download follows what's on screen — pick a subclass above and
+        # the CSV holds just that subclass's terms, named for it.
+        slug = script.fy_window_slug()
+        if is_all_buckets and not pair_search:
+            export_label = f"⬇ Download all {noun_plural} CSV"
+            export_name = f"subject_by_lc_{noun}_{slug}.csv"
+        elif is_all_buckets:
+            export_label = f"⬇ Download search results ({len(pair_display):,} rows)"
+            export_name = f"subject_by_lc_{noun}_search_{slug}.csv"
+        else:
+            export_label = f"⬇ Download {picked_code} terms ({len(pair_display):,} rows)"
+            export_name = f"subject_terms_{picked_code}_{slug}.csv"
+
+        c_dl1, c_dl2 = st.columns(2)
+        with c_dl1:
+            download_button_for_df(
+                pair_display, export_label, export_name, key="dl_subj_lc",
+            )
+        with c_dl2:
+            # Full table stays one click away whenever the view is narrowed.
+            if not (is_all_buckets and not pair_search):
+                download_button_for_df(
+                    pairs_df.sort_values([lc_col, "Loans"], ascending=[True, False]),
+                    f"⬇ Download all {noun_plural} instead",
+                    f"subject_by_lc_{noun}_{slug}.csv",
+                    key="dl_subj_lc_all",
+                )
 
         st.divider()
         st.markdown(f"#### Terms that cross the most {noun_plural}")
