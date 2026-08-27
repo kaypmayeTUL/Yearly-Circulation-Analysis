@@ -77,6 +77,314 @@ NEG_COLOR = "#B84343"
 NEUTRAL_COLOR = "#8A8A8A"
 
 # ---------------------------------------------------------------------------
+# LC subclass captions
+# ---------------------------------------------------------------------------
+# Transcribed from the Library of Congress Classification Outline
+# (https://www.loc.gov/catdir/cpso/lcco/), one entry per subclass across all
+# 21 classes. This is a FALLBACK only: whatever the analysis script's
+# LC_SUBCLASS_DESC already defines wins, so local caption choices are never
+# overridden. Its job is to stop unfamiliar subclasses from rendering as
+# "XX - Subclass XX" in the charts.
+#
+# Two caveats worth knowing before you read a K caption literally:
+#   * K's KJ-KKZ and KL-KWX spans are labeled at the grouped span level the
+#     LOC outline uses ("Law of Europe", "Law of Asia and Eurasia, Africa,
+#     Pacific Area, and Antarctica") rather than per-country. Fine for
+#     grouping, too coarse for a law-collection review.
+#   * E and F have no subclasses in LCC; the entries below are class-level
+#     captions so E/F call numbers still get a readable label.
+LCC_SUBCLASS_OUTLINE: dict[str, str] = {
+    # Class A — General Works
+    "AC": "Collections. Series. Collected works",
+    "AE": "Encyclopedias",
+    "AG": "Dictionaries and other general reference works",
+    "AI": "Indexes",
+    "AM": "Museums. Collectors and collecting",
+    "AN": "Newspapers",
+    "AP": "Periodicals",
+    "AS": "Academies and learned societies",
+    "AY": "Yearbooks. Almanacs. Directories",
+    "AZ": "History of scholarship and learning. The humanities",
+    # Class B — Philosophy. Psychology. Religion
+    "B": "Philosophy (General)",
+    "BC": "Logic",
+    "BD": "Speculative philosophy",
+    "BF": "Psychology",
+    "BH": "Aesthetics",
+    "BJ": "Ethics",
+    "BL": "Religions. Mythology. Rationalism",
+    "BM": "Judaism",
+    "BP": "Islam. Bahai Faith. Theosophy, etc.",
+    "BQ": "Buddhism",
+    "BR": "Christianity",
+    "BS": "The Bible",
+    "BT": "Doctrinal Theology",
+    "BV": "Practical Theology",
+    "BX": "Christian Denominations",
+    # Class C — Auxiliary Sciences of History
+    "C": "Auxiliary Sciences of History (General)",
+    "CB": "History of Civilization",
+    "CC": "Archaeology",
+    "CD": "Diplomatics. Archives. Seals",
+    "CE": "Technical Chronology. Calendar",
+    "CJ": "Numismatics",
+    "CN": "Inscriptions. Epigraphy",
+    "CR": "Heraldry",
+    "CS": "Genealogy",
+    "CT": "Biography",
+    # Class D — World History
+    "D": "History (General)",
+    "DA": "Great Britain",
+    "DAW": "Central Europe",
+    "DB": "Austria. Liechtenstein. Hungary. Czechoslovakia",
+    "DC": "France. Andorra. Monaco",
+    "DD": "Germany",
+    "DE": "Greco-Roman World",
+    "DF": "Greece",
+    "DG": "Italy. Malta",
+    "DH": "Low Countries. Benelux Countries",
+    "DJ": "Netherlands (Holland)",
+    "DJK": "Eastern Europe (General)",
+    "DK": "Russia. Soviet Union. Former Soviet Republics. Poland",
+    "DL": "Northern Europe. Scandinavia",
+    "DP": "Spain. Portugal",
+    "DQ": "Switzerland",
+    "DR": "Balkan Peninsula",
+    "DS": "Asia",
+    "DT": "Africa",
+    "DU": "Oceania (South Seas)",
+    "DX": "Romanies",
+    # Classes E-F — History of the Americas (no subclasses)
+    "E": "History of the Americas (General). United States (General)",
+    "F": "United States local history. Americas outside the United States",
+    # Class G — Geography. Anthropology. Recreation
+    "G": "Geography (General). Atlases. Maps",
+    "GA": "Mathematical geography. Cartography",
+    "GB": "Physical geography",
+    "GC": "Oceanography",
+    "GE": "Environmental sciences",
+    "GF": "Human ecology. Anthropogeography",
+    "GN": "Anthropology",
+    "GR": "Folklore",
+    "GT": "Manners and customs (General)",
+    "GV": "Recreation. Leisure",
+    # Class H — Social Sciences
+    "H": "Social sciences (General)",
+    "HA": "Statistics",
+    "HB": "Economic theory. Demography",
+    "HC": "Economic history and conditions",
+    "HD": "Industries. Land use. Labor",
+    "HE": "Transportation and communications",
+    "HF": "Commerce",
+    "HG": "Finance",
+    "HJ": "Public finance",
+    "HM": "Sociology (General)",
+    "HN": "Social history and conditions. Social problems. Social reform",
+    "HQ": "The family. Marriage. Women",
+    "HS": "Societies: secret, benevolent, etc.",
+    "HT": "Communities. Classes. Races",
+    "HV": "Social pathology. Social and public welfare. Criminology",
+    "HX": "Socialism. Communism. Anarchism",
+    # Class J — Political Science
+    "J": "General legislative and executive papers",
+    "JA": "Political science (General)",
+    "JC": "Political theory",
+    "JF": "Political institutions and public administration",
+    "JJ": "Political institutions and public administration (North America)",
+    "JK": "Political institutions and public administration (United States)",
+    "JL": "Political institutions and public administration (Canada, Latin America, etc.)",
+    "JN": "Political institutions and public administration (Europe)",
+    "JQ": "Political institutions and public administration (Asia, Africa, Australia, Pacific Area, etc.)",
+    "JS": "Local government. Municipal government",
+    "JV": "Colonies and colonization. Emigration and immigration. International migration",
+    "JZ": "International relations",
+    # Class K — Law
+    "K": "Law in general. Comparative and uniform law. Jurisprudence",
+    "KB": "Religious law in general. Comparative religious law. Jurisprudence",
+    "KBM": "Jewish law",
+    "KBP": "Islamic law",
+    "KBR": "History of canon law",
+    "KBU": "Law of the Roman Catholic Church. The Holy See",
+    "KD": "Law of the United Kingdom and Ireland",
+    "KDC": "Law of Scotland",
+    "KDE": "Law of Northern Ireland",
+    "KDG": "Law of the Isle of Man. Channel Islands",
+    "KDK": "Law of Ireland (Eire)",
+    "KDZ": "Law of America. North America",
+    "KE": "Law of Canada",
+    "KF": "Law of the United States",
+    "KG": "Law of Latin America, Mexico, Central America, West Indies, Caribbean area",
+    "KH": "Law of South America",
+    "KJ": "Law of Europe",
+    "KJV": "Law of France",
+    "KK": "Law of Germany",
+    "KKC": "Law of Germany",
+    "KL": "Law of Asia and Eurasia, Africa, Pacific Area, and Antarctica",
+    "KM": "Law of Asia and Eurasia, Africa, Pacific Area, and Antarctica",
+    "KN": "Law of Asia and Eurasia, Africa, Pacific Area, and Antarctica",
+    "KP": "Law of Asia and Eurasia, Africa, Pacific Area, and Antarctica",
+    "KQ": "Law of Asia and Eurasia, Africa, Pacific Area, and Antarctica",
+    "KR": "Law of Asia and Eurasia, Africa, Pacific Area, and Antarctica",
+    "KS": "Law of Asia and Eurasia, Africa, Pacific Area, and Antarctica",
+    "KT": "Law of Asia and Eurasia, Africa, Pacific Area, and Antarctica",
+    "KU": "Law of Asia and Eurasia, Africa, Pacific Area, and Antarctica",
+    "KV": "Law of Asia and Eurasia, Africa, Pacific Area, and Antarctica",
+    "KW": "Law of Asia and Eurasia, Africa, Pacific Area, and Antarctica",
+    "KWX": "Law of Asia and Eurasia, Africa, Pacific Area, and Antarctica",
+    "KZ": "Law of nations",
+    # Class L — Education
+    "L": "Education (General)",
+    "LA": "History of education",
+    "LB": "Theory and practice of education",
+    "LC": "Special aspects of education",
+    "LD": "Individual institutions - United States",
+    "LE": "Individual institutions - America (except United States)",
+    "LF": "Individual institutions - Europe",
+    "LG": "Individual institutions - Asia, Africa, Indian Ocean islands, Australia, New Zealand, Pacific islands",
+    "LH": "College and school magazines and papers",
+    "LJ": "Student fraternities and societies, United States",
+    "LT": "Textbooks",
+    # Class M — Music
+    "M": "Music",
+    "ML": "Literature on music",
+    "MT": "Musical instruction and study",
+    # Class N — Fine Arts
+    "N": "Visual arts",
+    "NA": "Architecture",
+    "NB": "Sculpture",
+    "NC": "Drawing. Design. Illustration",
+    "ND": "Painting",
+    "NE": "Print media",
+    "NK": "Decorative arts",
+    "NX": "Arts in general",
+    # Class P — Language and Literature
+    "P": "Philology. Linguistics",
+    "PA": "Greek language and literature. Latin language and literature",
+    "PB": "Modern languages. Celtic languages",
+    "PC": "Romanic languages",
+    "PD": "Germanic languages. Scandinavian languages",
+    "PE": "English language",
+    "PF": "West Germanic languages",
+    "PG": "Slavic languages. Baltic languages. Albanian language",
+    "PH": "Uralic languages. Basque language",
+    "PJ": "Oriental languages and literatures",
+    "PK": "Indo-Iranian languages and literatures",
+    "PL": "Languages and literatures of Eastern Asia, Africa, Oceania",
+    "PM": "Hyperborean, Indian, and artificial languages",
+    "PN": "Literature (General)",
+    "PQ": "French, Italian, Spanish, and Portuguese literature",
+    "PR": "English literature",
+    "PS": "American literature",
+    "PT": "German, Dutch, Flemish, Afrikaans, Scandinavian, and Icelandic literature",
+    "PZ": "Fiction and juvenile belles lettres",
+    # Class Q — Science
+    "Q": "Science (General)",
+    "QA": "Mathematics",
+    "QB": "Astronomy",
+    "QC": "Physics",
+    "QD": "Chemistry",
+    "QE": "Geology",
+    "QH": "Natural history. Biology",
+    "QK": "Botany",
+    "QL": "Zoology",
+    "QM": "Human anatomy",
+    "QP": "Physiology",
+    "QR": "Microbiology",
+    # Class R — Medicine
+    "R": "Medicine (General)",
+    "RA": "Public aspects of medicine",
+    "RB": "Pathology",
+    "RC": "Internal medicine",
+    "RD": "Surgery",
+    "RE": "Ophthalmology",
+    "RF": "Otorhinolaryngology",
+    "RG": "Gynecology and obstetrics",
+    "RJ": "Pediatrics",
+    "RK": "Dentistry",
+    "RL": "Dermatology",
+    "RM": "Therapeutics. Pharmacology",
+    "RS": "Pharmacy and materia medica",
+    "RT": "Nursing",
+    "RV": "Botanic, Thomsonian, and eclectic medicine",
+    "RX": "Homeopathy",
+    "RZ": "Other systems of medicine",
+    # Class S — Agriculture
+    "S": "Agriculture (General)",
+    "SB": "Plant culture",
+    "SD": "Forestry",
+    "SF": "Animal culture",
+    "SH": "Aquaculture. Fisheries. Angling",
+    "SK": "Hunting sports",
+    # Class T — Technology
+    "T": "Technology (General)",
+    "TA": "Engineering (General). Civil engineering",
+    "TC": "Hydraulic engineering. Ocean engineering",
+    "TD": "Environmental technology. Sanitary engineering",
+    "TE": "Highway engineering. Roads and pavements",
+    "TF": "Railroad engineering and operation",
+    "TG": "Bridge engineering",
+    "TH": "Building construction",
+    "TJ": "Mechanical engineering and machinery",
+    "TK": "Electrical engineering. Electronics. Nuclear engineering",
+    "TL": "Motor vehicles. Aeronautics. Astronautics",
+    "TN": "Mining engineering. Metallurgy",
+    "TP": "Chemical technology",
+    "TR": "Photography",
+    "TS": "Manufactures",
+    "TT": "Handicrafts. Arts and crafts",
+    "TX": "Home economics",
+    # Class U — Military Science
+    "U": "Military science (General)",
+    "UA": "Armies: Organization, distribution, military situation",
+    "UB": "Military administration",
+    "UC": "Maintenance and transportation",
+    "UD": "Infantry",
+    "UE": "Cavalry. Armor",
+    "UF": "Artillery",
+    "UG": "Military engineering. Air forces",
+    "UH": "Other services",
+    # Class V — Naval Science
+    "V": "Naval science (General)",
+    "VA": "Navies: Organization, distribution, naval situation",
+    "VB": "Naval administration",
+    "VC": "Naval maintenance",
+    "VD": "Naval seamen",
+    "VE": "Marines",
+    "VF": "Naval ordnance",
+    "VG": "Minor services of navies",
+    "VK": "Navigation. Merchant marine",
+    "VM": "Naval architecture. Shipbuilding. Marine engineering",
+    # Class Z — Bibliography. Library Science
+    "Z": "Books (General). Writing. Paleography. Book industries and trade. Libraries. Bibliography",
+    "ZA": "Information resources (General)",
+}
+
+
+def subclass_description(code: str) -> str:
+    """Best available caption for an LC subclass code.
+
+    Resolution order: the script's own LC_SUBCLASS_DESC, then the LOC outline
+    above, then progressively shorter prefixes (so a three-letter code like
+    KFA falls back to KF, then K), then a plain placeholder. The prefix walk
+    matters because get_subclass() may hand back three letters for codes like
+    DAW, DJK, KBM or the KF state schedules.
+    """
+    if not isinstance(code, str) or not code:
+        return "(no LC subclass)"
+    if code in LC_SUBCLASS_DESC:
+        return LC_SUBCLASS_DESC[code]
+    if code in LCC_SUBCLASS_OUTLINE:
+        return LCC_SUBCLASS_OUTLINE[code]
+    for cut in range(len(code) - 1, 0, -1):
+        stem = code[:cut]
+        if stem in LC_SUBCLASS_DESC:
+            return f"{LC_SUBCLASS_DESC[stem]} (under {stem})"
+        if stem in LCC_SUBCLASS_OUTLINE:
+            return f"{LCC_SUBCLASS_OUTLINE[stem]} (under {stem})"
+    return f"Subclass {code}"
+
+
+# ---------------------------------------------------------------------------
 # Data loading + prep
 # ---------------------------------------------------------------------------
 
@@ -190,9 +498,29 @@ def split_heading_terms(heading: str) -> list[str]:
     return [part.strip(" .,") for part in heading.split("--") if part.strip(" .,")]
 
 
+# Level metadata: the two granularities the Subjects × LC tab can work at.
+# Keeping the column name, caption resolver and label in one place means the
+# compute + render path is identical for both — no parallel code paths.
+LC_LEVELS = {
+    "LC Class": {
+        "col": "LC_Class",
+        "describe": lambda c: LC_CLASS_DESC.get(c, f"{c} - Class {c}"),
+        "noun": "class",
+        "noun_plural": "classes",
+    },
+    "LC Subclass": {
+        "col": "LC_Subclass",
+        "describe": subclass_description,
+        "noun": "subclass",
+        "noun_plural": "subclasses",
+    },
+}
+
+
 @st.cache_data(show_spinner=False)
-def compute_subject_by_lc(df: pd.DataFrame, granularity: str = "Full headings") -> pd.DataFrame:
-    """Loans per (LC class, subject) pair.
+def compute_subject_by_lc(df: pd.DataFrame, granularity: str = "Full headings",
+                          level: str = "LC Class") -> pd.DataFrame:
+    """Loans per (LC class-or-subclass, subject) pair.
 
     granularity="Full headings" keeps whole heading strings intact; "Terms"
     splits them on '--' so a term like 'United States' is counted once no
@@ -200,9 +528,16 @@ def compute_subject_by_lc(df: pd.DataFrame, granularity: str = "Full headings") 
     once per bib row, so a record carrying two headings that both include
     'United States' contributes its loans a single time.
 
+    level picks the LC granularity — class (H) or subclass (HQ). Subclass is
+    the sharper cut for collection work but spreads the same loans over ~10x
+    the buckets, so cells thin out fast.
+
     Not mode-specific: this aggregates raw loans across whatever fiscal years
     are selected, so it works the same in snapshot and trend mode.
     """
+    spec = LC_LEVELS[level]
+    lc_col = spec["col"]
+
     d = df.copy()
     d["_row_id"] = np.arange(len(d))
     d["_subj"] = d["Subjects"].apply(parse_full_headings)
@@ -217,48 +552,55 @@ def compute_subject_by_lc(df: pd.DataFrame, granularity: str = "Full headings") 
     # One count per (row, term) — protects against double-counting loans.
     exploded = exploded.drop_duplicates(subset=["_row_id", "_subj"])
 
-    # Records with an unparseable call number have no class to sit under.
-    exploded = exploded[exploded["LC_Class"].notna() & (exploded["LC_Class"] != "")]
+    # Records with an unparseable call number have no bucket to sit under.
+    exploded = exploded[exploded[lc_col].notna() & (exploded[lc_col] != "")]
     if exploded.empty:
         return pd.DataFrame(
-            columns=["Discipline", "LC_Class", "Class Description",
+            columns=["Discipline", lc_col, "LC Description",
                      "Subject", "Loans", "Titles"]
         )
 
     pairs = (
-        exploded.groupby(["LC_Class", "_subj"])
+        exploded.groupby([lc_col, "_subj"])
         .agg(Loans=("Loans (In House + Not In House)", "sum"),
              Titles=("Title", "nunique"))
         .reset_index()
         .rename(columns={"_subj": "Subject"})
     )
-    pairs["Class Description"] = pairs["LC_Class"].map(
-        lambda c: LC_CLASS_DESC.get(c, f"{c} - Class {c}")
-    )
-    pairs["Discipline"] = pairs["LC_Class"].apply(categorize_discipline)
+    pairs["LC Description"] = pairs[lc_col].map(spec["describe"])
+    pairs["Discipline"] = pairs[lc_col].apply(categorize_discipline)
     return pairs[
-        ["Discipline", "LC_Class", "Class Description", "Subject", "Loans", "Titles"]
-    ].sort_values(["LC_Class", "Loans"], ascending=[True, False])
+        ["Discipline", lc_col, "LC Description", "Subject", "Loans", "Titles"]
+    ].sort_values([lc_col, "Loans"], ascending=[True, False])
 
 
 @st.cache_data(show_spinner=False)
-def compute_subject_breadth(pairs: pd.DataFrame) -> pd.DataFrame:
-    """Collapse the (class, subject) pairs to one row per subject.
+def compute_subject_breadth(pairs: pd.DataFrame,
+                            level: str = "LC Class") -> pd.DataFrame:
+    """Collapse the (class-or-subclass, subject) pairs to one row per subject.
 
-    'LC Classes' is how many distinct classes the term shows up in — the
-    breadth measure. '% in Top Class' says how concentrated it is: a term at
-    98% sits inside one class, a term at 30% is genuinely cross-cutting.
+    'LC Buckets' is how many distinct classes or subclasses the term shows up
+    in — the breadth measure. '% in Top Bucket' says how concentrated it is:
+    a term at 98% sits inside one bucket, a term at 30% is genuinely
+    cross-cutting.
     """
+    spec = LC_LEVELS[level]
+    lc_col = spec["col"]
+    count_label = f"LC {spec['noun_plural'].capitalize()}"
+    top_label = f"Top {spec['noun'].capitalize()}"
+    pct_label = f"% in Top {spec['noun'].capitalize()}"
+    present_label = f"{spec['noun_plural'].capitalize()} Present"
+
     if pairs.empty:
         return pd.DataFrame(
-            columns=["Subject", "LC Classes", "Loans", "Titles",
-                     "Top Class", "Top Class Description", "% in Top Class",
-                     "Classes Present"]
+            columns=["Subject", count_label, "Loans", "Titles",
+                     top_label, f"{top_label} Description", pct_label,
+                     present_label]
         )
 
     totals = (
         pairs.groupby("Subject")
-        .agg(**{"LC Classes": ("LC_Class", "nunique"),
+        .agg(**{count_label: (lc_col, "nunique"),
                 "Loans": ("Loans", "sum"),
                 "Titles": ("Titles", "sum")})
         .reset_index()
@@ -266,25 +608,25 @@ def compute_subject_breadth(pairs: pd.DataFrame) -> pd.DataFrame:
     top = (
         pairs.sort_values("Loans", ascending=False)
         .drop_duplicates("Subject")
-        [["Subject", "LC_Class", "Class Description", "Loans"]]
-        .rename(columns={"LC_Class": "Top Class",
-                         "Class Description": "Top Class Description",
+        [["Subject", lc_col, "LC Description", "Loans"]]
+        .rename(columns={lc_col: top_label,
+                         "LC Description": f"{top_label} Description",
                          "Loans": "_top_loans"})
     )
     out = totals.merge(top, on="Subject", how="left")
-    out["% in Top Class"] = np.where(
+    out[pct_label] = np.where(
         out["Loans"] > 0, out["_top_loans"] / out["Loans"] * 100.0, np.nan
     ).round(1)
-    classes_present = (
-        pairs.groupby("Subject")["LC_Class"]
+    present = (
+        pairs.groupby("Subject")[lc_col]
         .apply(lambda s: ", ".join(sorted(set(s))))
-        .rename("Classes Present").reset_index()
+        .rename(present_label).reset_index()
     )
-    out = out.merge(classes_present, on="Subject", how="left")
+    out = out.merge(present, on="Subject", how="left")
     return out[
-        ["Subject", "LC Classes", "Loans", "Titles",
-         "Top Class", "Top Class Description", "% in Top Class", "Classes Present"]
-    ].sort_values(["LC Classes", "Loans"], ascending=[False, False])
+        ["Subject", count_label, "Loans", "Titles",
+         top_label, f"{top_label} Description", pct_label, present_label]
+    ].sort_values([count_label, "Loans"], ascending=[False, False])
 
 
 @st.cache_data(show_spinner=False)
@@ -611,36 +953,38 @@ def make_snapshot_chart(df: pd.DataFrame, label_col: str, value_col: str,
 
 
 def make_subject_lc_heatmap(pairs: pd.DataFrame, subjects: list[str],
-                            title: str) -> go.Figure:
-    """Subjects (rows) × LC classes (columns), shaded by loans.
+                            title: str, level: str = "LC Class") -> go.Figure:
+    """Subjects (rows) × LC classes or subclasses (columns), shaded by loans.
 
     Shows where a term's use actually sits: a row lit up in one column is a
-    term owned by one class, a row with several lit columns is cross-cutting.
+    term owned by one bucket, a row with several lit columns is cross-cutting.
     """
-    if pairs.empty or not subjects:
+    spec = LC_LEVELS[level]
+    lc_col = spec["col"]
+
+    def _empty(msg="No data to display for these filters."):
         fig = go.Figure()
-        fig.add_annotation(text="No data to display for these filters.",
-                           x=0.5, y=0.5, showarrow=False)
+        fig.add_annotation(text=msg, x=0.5, y=0.5, showarrow=False)
         fig.update_layout(height=360, plot_bgcolor="white")
         return fig
 
+    if pairs.empty or not subjects:
+        return _empty()
+
     sub = pairs[pairs["Subject"].isin(subjects)]
-    mat = sub.pivot_table(index="Subject", columns="LC_Class", values="Loans",
+    mat = sub.pivot_table(index="Subject", columns=lc_col, values="Loans",
                           aggfunc="sum", fill_value=0)
     # Plot in the order handed in, reversed so the strongest lands at the top.
     mat = mat.reindex(index=[s for s in subjects if s in mat.index]).iloc[::-1]
     mat = mat.loc[:, mat.sum(axis=0) > 0]
     if mat.empty:
-        fig = go.Figure()
-        fig.add_annotation(text="No data to display for these filters.",
-                           x=0.5, y=0.5, showarrow=False)
-        fig.update_layout(height=360, plot_bgcolor="white")
-        return fig
+        return _empty()
 
+    describe = spec["describe"]
     hover = [
-        [f"<b>{subj}</b><br>Class {cls} — "
-         f"{LC_CLASS_DESC.get(cls, cls)}<br>Loans: {int(val):,}"
-         for cls, val in zip(mat.columns, row)]
+        [f"<b>{subj}</b><br>{spec['noun'].capitalize()} {code} — "
+         f"{describe(code)}<br>Loans: {int(val):,}"
+         for code, val in zip(mat.columns, row)]
         for subj, row in zip(mat.index, mat.values)
     ]
     fig = go.Figure(go.Heatmap(
@@ -655,11 +999,14 @@ def make_subject_lc_heatmap(pairs: pd.DataFrame, subjects: list[str],
     fig.update_layout(
         title=dict(text=title, x=0.02, xanchor="left",
                    font=dict(size=15, family="system-ui")),
-        xaxis=dict(title="LC Class", side="top", type="category"),
+        xaxis=dict(title=level, side="top", type="category",
+                   tickangle=-45 if len(mat.columns) > 12 else 0),
         yaxis=dict(title="", automargin=True, type="category"),
         height=max(400, 24 * len(mat) + 160),
+        # Wide subclass matrices need room for the rotated tick labels.
+        width=None,
         plot_bgcolor="white",
-        margin=dict(l=0, r=40, t=90, b=40),
+        margin=dict(l=0, r=40, t=110 if len(mat.columns) > 12 else 90, b=40),
     )
     return fig
 
@@ -1141,11 +1488,12 @@ with tabs["Subject Headings"]:
                                key="dl_subj")
 
 # --- Subjects × LC ----------------------------------------------------------
-# Two questions, both phrased as "subject terms across LC classes":
-#   1. What are the popular terms *within* each class?
-#   2. Which terms show up *across* many classes (interdisciplinary pull)?
+# Two questions, both phrased as "subject terms across LC":
+#   1. What are the popular terms *within* each class/subclass?
+#   2. Which terms show up *across* many of them (interdisciplinary pull)?
+# The level toggle runs the identical analysis at class or subclass depth.
 with tabs["Subjects × LC"]:
-    st.subheader("Subject Terms Across LC Classes")
+    st.subheader("Subject Terms Across LC Classes and Subclasses")
     st.caption(
         f"Loans totalled across the selected fiscal years "
         f"({_fy_label() or 'selected FYs'}). No trend fitting here — this is a "
@@ -1153,16 +1501,26 @@ with tabs["Subjects × LC"]:
         "and trend mode."
     )
 
-    c_gran, c_topn = st.columns([2, 1])
+    c_level, c_gran, c_topn = st.columns([1.1, 1.4, 1])
+    with c_level:
+        lc_level = st.radio(
+            "LC level",
+            list(LC_LEVELS),
+            horizontal=False,
+            key="subjlc_level",
+            help="Class is the 21-bucket view (H, P, Q). Subclass is the "
+                 "working view for collection decisions (HQ, PS, QA) but "
+                 "splits the same loans across far more buckets.",
+        )
     with c_gran:
         granularity = st.radio(
             "Subject granularity",
             ["Full headings", "Terms"],
-            horizontal=True,
+            horizontal=False,
             key="subjlc_gran",
             help="Full headings keeps 'Politics and government--France' whole. "
                  "Terms splits on '--' so 'France' is counted once wherever it "
-                 "appears — better for spotting terms shared between classes.",
+                 "appears — better for spotting terms shared between buckets.",
         )
     with c_topn:
         top_n_subj = st.number_input(
@@ -1170,78 +1528,99 @@ with tabs["Subjects × LC"]:
             key="subjlc_topn",
         )
 
-    with st.spinner("Cross-tabulating subjects against LC classes…"):
-        pairs_df = compute_subject_by_lc(circ_df, granularity)
+    spec = LC_LEVELS[lc_level]
+    lc_col = spec["col"]
+    noun, noun_plural = spec["noun"], spec["noun_plural"]
+    count_label = f"LC {noun_plural.capitalize()}"
+    pct_label = f"% in Top {noun.capitalize()}"
 
-    unclassed = int(
-        (circ_df["LC_Class"].isna() | (circ_df["LC_Class"] == "")).sum()
-    )
+    with st.spinner(f"Cross-tabulating subjects against LC {noun_plural}…"):
+        pairs_df = compute_subject_by_lc(circ_df, granularity, lc_level)
+
+    unclassed = int((circ_df[lc_col].isna() | (circ_df[lc_col] == "")).sum())
     if unclassed:
         st.caption(
-            f"⚠ {unclassed:,} row(s) had no parseable LC class and are excluded "
-            "from this tab. They still count in the other tabs."
+            f"⚠ {unclassed:,} row(s) had no parseable LC {noun} and are "
+            "excluded from this tab. They still count in the other tabs."
         )
 
     if pairs_df.empty:
         st.info("No subject/LC pairs to show for the current selection.")
     else:
-        breadth_df = compute_subject_breadth(pairs_df)
+        breadth_df = compute_subject_breadth(pairs_df, lc_level)
 
-        st.markdown("#### Popular terms within a class")
-        class_options = (
-            pairs_df.groupby(["LC_Class", "Class Description"])["Loans"]
+        st.markdown(f"#### Popular terms within a {noun}")
+        bucket_options = (
+            pairs_df.groupby([lc_col, "LC Description"])["Loans"]
             .sum().reset_index().sort_values("Loans", ascending=False)
         )
-        class_labels = {
-            f"{row['LC_Class']} — {row['Class Description']}": row["LC_Class"]
-            for _, row in class_options.iterrows()
+        bucket_labels = {
+            f"{row[lc_col]} — {row['LC Description']}": row[lc_col]
+            for _, row in bucket_options.iterrows()
         }
         pick = st.selectbox(
-            "LC class",
-            ["All classes (side by side)"] + list(class_labels),
-            key="subjlc_class",
+            lc_level,
+            [f"All {noun_plural} (side by side)"] + list(bucket_labels),
+            key="subjlc_bucket",
         )
 
-        if pick == "All classes (side by side)":
+        if pick.startswith("All "):
             top_overall = (
                 pairs_df.groupby("Subject")["Loans"].sum()
                 .sort_values(ascending=False).head(int(top_n_subj)).index.tolist()
             )
+            # A subclass matrix can run to 100+ columns; cap it so the heatmap
+            # stays readable and let the table carry the long tail.
+            heat_src = pairs_df
+            n_buckets = pairs_df[lc_col].nunique()
+            max_cols = 30
+            if n_buckets > max_cols:
+                keep = (
+                    pairs_df[pairs_df["Subject"].isin(top_overall)]
+                    .groupby(lc_col)["Loans"].sum()
+                    .nlargest(max_cols).index
+                )
+                heat_src = pairs_df[pairs_df[lc_col].isin(keep)]
+                st.caption(
+                    f"Showing the {max_cols} busiest {noun_plural} of "
+                    f"{n_buckets:,}. The table below has all of them."
+                )
             st.plotly_chart(
                 make_subject_lc_heatmap(
-                    pairs_df, top_overall,
+                    heat_src, top_overall,
                     f"Top {len(top_overall)} Subject "
                     f"{'Terms' if granularity == 'Terms' else 'Headings'} "
-                    "by LC Class",
+                    f"by {lc_level}",
+                    level=lc_level,
                 ),
                 use_container_width=True,
                 key="chart_subjlc_heatmap",
             )
             st.caption(
                 "Darker cell = more loans. A row shaded in one column belongs "
-                "to that class; a row shaded across several is being pulled "
+                f"to that {noun}; a row shaded across several is being pulled "
                 "from more than one part of the collection."
             )
         else:
-            cls = class_labels[pick]
-            d_cls = pairs_df[pairs_df["LC_Class"] == cls].head(int(top_n_subj))
+            code = bucket_labels[pick]
+            d_bucket = pairs_df[pairs_df[lc_col] == code].head(int(top_n_subj))
             st.plotly_chart(
                 make_snapshot_chart(
-                    d_cls, "Subject", "Loans",
-                    f"Top Subjects — Class {pick}",
+                    d_bucket, "Subject", "Loans",
+                    f"Top Subjects — {pick}",
                     top_n=int(top_n_subj),
                 ),
                 use_container_width=True,
-                key="chart_subjlc_single_class",
+                key="chart_subjlc_single_bucket",
             )
 
         pair_search = st.text_input(
-            "🔍 Search the subject/class table",
+            f"🔍 Search the subject/{noun} table",
             placeholder="e.g. 'Louisiana', 'women', 'public health'",
             key="subjlc_search",
         )
-        pair_display = pairs_df if pick == "All classes (side by side)" \
-            else pairs_df[pairs_df["LC_Class"] == class_labels[pick]]
+        pair_display = pairs_df if pick.startswith("All ") \
+            else pairs_df[pairs_df[lc_col] == bucket_labels[pick]]
         if pair_search:
             pair_display = pair_display[
                 pair_display["Subject"].str.contains(pair_search, case=False, na=False)
@@ -1251,25 +1630,29 @@ with tabs["Subjects × LC"]:
             use_container_width=True, hide_index=True,
         )
         download_button_for_df(
-            pairs_df, "⬇ Download subject-by-LC-class CSV",
-            f"subject_by_lc_class_{script.fy_window_slug()}.csv",
+            pairs_df, f"⬇ Download subject-by-LC-{noun} CSV",
+            f"subject_by_lc_{noun}_{script.fy_window_slug()}.csv",
             key="dl_subj_lc",
         )
 
         st.divider()
-        st.markdown("#### Terms that cross the most classes")
+        st.markdown(f"#### Terms that cross the most {noun_plural}")
         st.caption(
-            "Ranked by how many distinct LC classes a term appears in. "
-            "'% in Top Class' is the concentration check — a high number "
-            "means the breadth is a long tail, a low number means the term "
-            "is genuinely split across the collection. Useful for spotting "
-            "interdisciplinary demand a single-class view would hide."
+            f"Ranked by how many distinct LC {noun_plural} a term appears in. "
+            f"'{pct_label}' is the concentration check — a high number means "
+            "the breadth is a long tail, a low number means the term is "
+            "genuinely split across the collection. Useful for spotting "
+            "interdisciplinary demand a single-bucket view would hide."
         )
+        # Subclasses fragment the same loans across more buckets, so the
+        # thresholds that make sense at class level are too strict here.
+        default_min_buckets = 3 if lc_level == "LC Class" else 5
         c_minc, c_minl = st.columns(2)
         with c_minc:
-            min_classes = st.number_input(
-                "Minimum LC classes", min_value=1, max_value=20, value=3, step=1,
-                key="subjlc_minclasses",
+            min_buckets = st.number_input(
+                f"Minimum LC {noun_plural}", min_value=1, max_value=50,
+                value=default_min_buckets, step=1,
+                key=f"subjlc_minbuckets_{lc_col}",
             )
         with c_minl:
             min_loans = st.number_input(
@@ -1277,20 +1660,20 @@ with tabs["Subjects × LC"]:
                 key="subjlc_minloans",
             )
         cross = breadth_df[
-            (breadth_df["LC Classes"] >= min_classes)
+            (breadth_df[count_label] >= min_buckets)
             & (breadth_df["Loans"] >= min_loans)
         ]
         if cross.empty:
             st.info("No terms clear those thresholds. Try lowering them, or "
                     "switch granularity to Terms — full headings rarely repeat "
-                    "across classes.")
+                    "across buckets.")
         else:
             st.plotly_chart(
                 make_snapshot_chart(
-                    cross.head(int(top_n_subj)), "Subject", "LC Classes",
+                    cross.head(int(top_n_subj)), "Subject", count_label,
                     f"Widest-Spanning Subject "
                     f"{'Terms' if granularity == 'Terms' else 'Headings'} "
-                    "(count of LC classes)",
+                    f"(count of LC {noun_plural})",
                     top_n=int(top_n_subj),
                 ),
                 use_container_width=True,
@@ -1299,7 +1682,7 @@ with tabs["Subjects × LC"]:
             st.dataframe(cross, use_container_width=True, hide_index=True)
         download_button_for_df(
             breadth_df, "⬇ Download subject breadth CSV",
-            f"subject_lc_breadth_{script.fy_window_slug()}.csv",
+            f"subject_lc_{noun}_breadth_{script.fy_window_slug()}.csv",
             key="dl_subj_breadth",
         )
 
