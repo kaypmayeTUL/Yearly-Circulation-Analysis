@@ -177,6 +177,116 @@ def compute_subject_shifts(df: pd.DataFrame) -> pd.DataFrame:
     ]
 
 
+def split_heading_terms(heading: str) -> list[str]:
+    """Split a full LC heading into its component terms.
+
+    'Politics and government--United States--19th century' becomes
+    ['Politics and government', 'United States', '19th century'].
+    Kept local rather than imported so the dashboard doesn't depend on the
+    script gaining a term-splitter. Empty fragments are dropped.
+    """
+    if not isinstance(heading, str):
+        return []
+    return [part.strip(" .,") for part in heading.split("--") if part.strip(" .,")]
+
+
+@st.cache_data(show_spinner=False)
+def compute_subject_by_lc(df: pd.DataFrame, granularity: str = "Full headings") -> pd.DataFrame:
+    """Loans per (LC class, subject) pair.
+
+    granularity="Full headings" keeps whole heading strings intact; "Terms"
+    splits them on '--' so a term like 'United States' is counted once no
+    matter which heading it came from. Either way a term is counted at most
+    once per bib row, so a record carrying two headings that both include
+    'United States' contributes its loans a single time.
+
+    Not mode-specific: this aggregates raw loans across whatever fiscal years
+    are selected, so it works the same in snapshot and trend mode.
+    """
+    d = df.copy()
+    d["_row_id"] = np.arange(len(d))
+    d["_subj"] = d["Subjects"].apply(parse_full_headings)
+    exploded = d.explode("_subj")
+    exploded = exploded[exploded["_subj"].notna() & (exploded["_subj"] != "")]
+
+    if granularity == "Terms":
+        exploded["_subj"] = exploded["_subj"].apply(split_heading_terms)
+        exploded = exploded.explode("_subj")
+        exploded = exploded[exploded["_subj"].notna() & (exploded["_subj"] != "")]
+
+    # One count per (row, term) — protects against double-counting loans.
+    exploded = exploded.drop_duplicates(subset=["_row_id", "_subj"])
+
+    # Records with an unparseable call number have no class to sit under.
+    exploded = exploded[exploded["LC_Class"].notna() & (exploded["LC_Class"] != "")]
+    if exploded.empty:
+        return pd.DataFrame(
+            columns=["Discipline", "LC_Class", "Class Description",
+                     "Subject", "Loans", "Titles"]
+        )
+
+    pairs = (
+        exploded.groupby(["LC_Class", "_subj"])
+        .agg(Loans=("Loans (In House + Not In House)", "sum"),
+             Titles=("Title", "nunique"))
+        .reset_index()
+        .rename(columns={"_subj": "Subject"})
+    )
+    pairs["Class Description"] = pairs["LC_Class"].map(
+        lambda c: LC_CLASS_DESC.get(c, f"{c} - Class {c}")
+    )
+    pairs["Discipline"] = pairs["LC_Class"].apply(categorize_discipline)
+    return pairs[
+        ["Discipline", "LC_Class", "Class Description", "Subject", "Loans", "Titles"]
+    ].sort_values(["LC_Class", "Loans"], ascending=[True, False])
+
+
+@st.cache_data(show_spinner=False)
+def compute_subject_breadth(pairs: pd.DataFrame) -> pd.DataFrame:
+    """Collapse the (class, subject) pairs to one row per subject.
+
+    'LC Classes' is how many distinct classes the term shows up in — the
+    breadth measure. '% in Top Class' says how concentrated it is: a term at
+    98% sits inside one class, a term at 30% is genuinely cross-cutting.
+    """
+    if pairs.empty:
+        return pd.DataFrame(
+            columns=["Subject", "LC Classes", "Loans", "Titles",
+                     "Top Class", "Top Class Description", "% in Top Class",
+                     "Classes Present"]
+        )
+
+    totals = (
+        pairs.groupby("Subject")
+        .agg(**{"LC Classes": ("LC_Class", "nunique"),
+                "Loans": ("Loans", "sum"),
+                "Titles": ("Titles", "sum")})
+        .reset_index()
+    )
+    top = (
+        pairs.sort_values("Loans", ascending=False)
+        .drop_duplicates("Subject")
+        [["Subject", "LC_Class", "Class Description", "Loans"]]
+        .rename(columns={"LC_Class": "Top Class",
+                         "Class Description": "Top Class Description",
+                         "Loans": "_top_loans"})
+    )
+    out = totals.merge(top, on="Subject", how="left")
+    out["% in Top Class"] = np.where(
+        out["Loans"] > 0, out["_top_loans"] / out["Loans"] * 100.0, np.nan
+    ).round(1)
+    classes_present = (
+        pairs.groupby("Subject")["LC_Class"]
+        .apply(lambda s: ", ".join(sorted(set(s))))
+        .rename("Classes Present").reset_index()
+    )
+    out = out.merge(classes_present, on="Subject", how="left")
+    return out[
+        ["Subject", "LC Classes", "Loans", "Titles",
+         "Top Class", "Top Class Description", "% in Top Class", "Classes Present"]
+    ].sort_values(["LC Classes", "Loans"], ascending=[False, False])
+
+
 @st.cache_data(show_spinner=False)
 def compute_geographic_shifts(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     df2 = df.copy()
@@ -500,6 +610,60 @@ def make_snapshot_chart(df: pd.DataFrame, label_col: str, value_col: str,
     return fig
 
 
+def make_subject_lc_heatmap(pairs: pd.DataFrame, subjects: list[str],
+                            title: str) -> go.Figure:
+    """Subjects (rows) × LC classes (columns), shaded by loans.
+
+    Shows where a term's use actually sits: a row lit up in one column is a
+    term owned by one class, a row with several lit columns is cross-cutting.
+    """
+    if pairs.empty or not subjects:
+        fig = go.Figure()
+        fig.add_annotation(text="No data to display for these filters.",
+                           x=0.5, y=0.5, showarrow=False)
+        fig.update_layout(height=360, plot_bgcolor="white")
+        return fig
+
+    sub = pairs[pairs["Subject"].isin(subjects)]
+    mat = sub.pivot_table(index="Subject", columns="LC_Class", values="Loans",
+                          aggfunc="sum", fill_value=0)
+    # Plot in the order handed in, reversed so the strongest lands at the top.
+    mat = mat.reindex(index=[s for s in subjects if s in mat.index]).iloc[::-1]
+    mat = mat.loc[:, mat.sum(axis=0) > 0]
+    if mat.empty:
+        fig = go.Figure()
+        fig.add_annotation(text="No data to display for these filters.",
+                           x=0.5, y=0.5, showarrow=False)
+        fig.update_layout(height=360, plot_bgcolor="white")
+        return fig
+
+    hover = [
+        [f"<b>{subj}</b><br>Class {cls} — "
+         f"{LC_CLASS_DESC.get(cls, cls)}<br>Loans: {int(val):,}"
+         for cls, val in zip(mat.columns, row)]
+        for subj, row in zip(mat.index, mat.values)
+    ]
+    fig = go.Figure(go.Heatmap(
+        z=mat.values,
+        x=list(mat.columns),
+        y=list(mat.index),
+        colorscale=[[0, "#F5F5F5"], [1, POS_COLOR]],
+        hovertext=hover,
+        hoverinfo="text",
+        colorbar=dict(title="Loans"),
+    ))
+    fig.update_layout(
+        title=dict(text=title, x=0.02, xanchor="left",
+                   font=dict(size=15, family="system-ui")),
+        xaxis=dict(title="LC Class", side="top", type="category"),
+        yaxis=dict(title="", automargin=True, type="category"),
+        height=max(400, 24 * len(mat) + 160),
+        plot_bgcolor="white",
+        margin=dict(l=0, r=40, t=90, b=40),
+    )
+    return fig
+
+
 def download_button_for_df(df: pd.DataFrame, label: str, filename: str,
                             key: Optional[str] = None):
     csv = df.to_csv(index=False).encode("utf-8")
@@ -697,6 +861,7 @@ tab_labels = [
     "LC Class",
     "LC Subclass",
     "Subject Headings",
+    "Subjects × LC",
     "Geographic",
     "Weeding",
     "E-Book Candidates",
@@ -705,10 +870,12 @@ if holdings_weed_df is not None:
     tab_labels.append("Holdings Weeding")
 tab_labels.append("📘 Guide")
 
-tabs = st.tabs(tab_labels)
+# Keyed by label rather than position — the Holdings tab is conditional and
+# positional indices break every time a tab is inserted.
+tabs = dict(zip(tab_labels, st.tabs(tab_labels)))
 
 # --- Overview ---------------------------------------------------------------
-with tabs[0]:
+with tabs["🏠 Overview"]:
     if is_snapshot:
         st.subheader(f"Snapshot — {selected_years[0]}")
         st.caption("Single fiscal year selected. Showing top categories by "
@@ -799,7 +966,7 @@ with tabs[0]:
             )
 
 # --- LC Class ---------------------------------------------------------------
-with tabs[1]:
+with tabs["LC Class"]:
     if is_snapshot:
         st.subheader(f"LC Class — {selected_years[0]} Snapshot")
         disc_choice = st.selectbox(
@@ -844,7 +1011,7 @@ with tabs[1]:
                                key="dl_lc_class")
 
 # --- LC Subclass ------------------------------------------------------------
-with tabs[2]:
+with tabs["LC Subclass"]:
     if is_snapshot:
         st.subheader(f"LC Subclass — {selected_years[0]} Snapshot")
         disc_choice = st.selectbox(
@@ -899,7 +1066,7 @@ with tabs[2]:
                                key="dl_lc_sub")
 
 # --- Subject Headings -------------------------------------------------------
-with tabs[3]:
+with tabs["Subject Headings"]:
     if is_snapshot:
         st.subheader(f"Subject Headings — {selected_years[0]} Snapshot")
         st.caption("Full LC heading strings ranked by loans this fiscal year.")
@@ -973,8 +1140,171 @@ with tabs[3]:
                                f"subject_term_shifts_{script.fy_window_slug()}.csv",
                                key="dl_subj")
 
+# --- Subjects × LC ----------------------------------------------------------
+# Two questions, both phrased as "subject terms across LC classes":
+#   1. What are the popular terms *within* each class?
+#   2. Which terms show up *across* many classes (interdisciplinary pull)?
+with tabs["Subjects × LC"]:
+    st.subheader("Subject Terms Across LC Classes")
+    st.caption(
+        f"Loans totalled across the selected fiscal years "
+        f"({_fy_label() or 'selected FYs'}). No trend fitting here — this is a "
+        "'where does subject use sit' view, so it reads the same in snapshot "
+        "and trend mode."
+    )
+
+    c_gran, c_topn = st.columns([2, 1])
+    with c_gran:
+        granularity = st.radio(
+            "Subject granularity",
+            ["Full headings", "Terms"],
+            horizontal=True,
+            key="subjlc_gran",
+            help="Full headings keeps 'Politics and government--France' whole. "
+                 "Terms splits on '--' so 'France' is counted once wherever it "
+                 "appears — better for spotting terms shared between classes.",
+        )
+    with c_topn:
+        top_n_subj = st.number_input(
+            "Terms to show", min_value=5, max_value=60, value=20, step=5,
+            key="subjlc_topn",
+        )
+
+    with st.spinner("Cross-tabulating subjects against LC classes…"):
+        pairs_df = compute_subject_by_lc(circ_df, granularity)
+
+    unclassed = int(
+        (circ_df["LC_Class"].isna() | (circ_df["LC_Class"] == "")).sum()
+    )
+    if unclassed:
+        st.caption(
+            f"⚠ {unclassed:,} row(s) had no parseable LC class and are excluded "
+            "from this tab. They still count in the other tabs."
+        )
+
+    if pairs_df.empty:
+        st.info("No subject/LC pairs to show for the current selection.")
+    else:
+        breadth_df = compute_subject_breadth(pairs_df)
+
+        st.markdown("#### Popular terms within a class")
+        class_options = (
+            pairs_df.groupby(["LC_Class", "Class Description"])["Loans"]
+            .sum().reset_index().sort_values("Loans", ascending=False)
+        )
+        class_labels = {
+            f"{row['LC_Class']} — {row['Class Description']}": row["LC_Class"]
+            for _, row in class_options.iterrows()
+        }
+        pick = st.selectbox(
+            "LC class",
+            ["All classes (side by side)"] + list(class_labels),
+            key="subjlc_class",
+        )
+
+        if pick == "All classes (side by side)":
+            top_overall = (
+                pairs_df.groupby("Subject")["Loans"].sum()
+                .sort_values(ascending=False).head(int(top_n_subj)).index.tolist()
+            )
+            st.plotly_chart(
+                make_subject_lc_heatmap(
+                    pairs_df, top_overall,
+                    f"Top {len(top_overall)} Subject "
+                    f"{'Terms' if granularity == 'Terms' else 'Headings'} "
+                    "by LC Class",
+                ),
+                use_container_width=True,
+                key="chart_subjlc_heatmap",
+            )
+            st.caption(
+                "Darker cell = more loans. A row shaded in one column belongs "
+                "to that class; a row shaded across several is being pulled "
+                "from more than one part of the collection."
+            )
+        else:
+            cls = class_labels[pick]
+            d_cls = pairs_df[pairs_df["LC_Class"] == cls].head(int(top_n_subj))
+            st.plotly_chart(
+                make_snapshot_chart(
+                    d_cls, "Subject", "Loans",
+                    f"Top Subjects — Class {pick}",
+                    top_n=int(top_n_subj),
+                ),
+                use_container_width=True,
+                key="chart_subjlc_single_class",
+            )
+
+        pair_search = st.text_input(
+            "🔍 Search the subject/class table",
+            placeholder="e.g. 'Louisiana', 'women', 'public health'",
+            key="subjlc_search",
+        )
+        pair_display = pairs_df if pick == "All classes (side by side)" \
+            else pairs_df[pairs_df["LC_Class"] == class_labels[pick]]
+        if pair_search:
+            pair_display = pair_display[
+                pair_display["Subject"].str.contains(pair_search, case=False, na=False)
+            ]
+        st.dataframe(
+            pair_display.sort_values("Loans", ascending=False),
+            use_container_width=True, hide_index=True,
+        )
+        download_button_for_df(
+            pairs_df, "⬇ Download subject-by-LC-class CSV",
+            f"subject_by_lc_class_{script.fy_window_slug()}.csv",
+            key="dl_subj_lc",
+        )
+
+        st.divider()
+        st.markdown("#### Terms that cross the most classes")
+        st.caption(
+            "Ranked by how many distinct LC classes a term appears in. "
+            "'% in Top Class' is the concentration check — a high number "
+            "means the breadth is a long tail, a low number means the term "
+            "is genuinely split across the collection. Useful for spotting "
+            "interdisciplinary demand a single-class view would hide."
+        )
+        c_minc, c_minl = st.columns(2)
+        with c_minc:
+            min_classes = st.number_input(
+                "Minimum LC classes", min_value=1, max_value=20, value=3, step=1,
+                key="subjlc_minclasses",
+            )
+        with c_minl:
+            min_loans = st.number_input(
+                "Minimum total loans", min_value=0, value=10, step=5,
+                key="subjlc_minloans",
+            )
+        cross = breadth_df[
+            (breadth_df["LC Classes"] >= min_classes)
+            & (breadth_df["Loans"] >= min_loans)
+        ]
+        if cross.empty:
+            st.info("No terms clear those thresholds. Try lowering them, or "
+                    "switch granularity to Terms — full headings rarely repeat "
+                    "across classes.")
+        else:
+            st.plotly_chart(
+                make_snapshot_chart(
+                    cross.head(int(top_n_subj)), "Subject", "LC Classes",
+                    f"Widest-Spanning Subject "
+                    f"{'Terms' if granularity == 'Terms' else 'Headings'} "
+                    "(count of LC classes)",
+                    top_n=int(top_n_subj),
+                ),
+                use_container_width=True,
+                key="chart_subjlc_breadth",
+            )
+            st.dataframe(cross, use_container_width=True, hide_index=True)
+        download_button_for_df(
+            breadth_df, "⬇ Download subject breadth CSV",
+            f"subject_lc_breadth_{script.fy_window_slug()}.csv",
+            key="dl_subj_breadth",
+        )
+
 # --- Geographic Trends ------------------------------------------------------
-with tabs[4]:
+with tabs["Geographic"]:
     if is_snapshot:
         st.subheader(f"Geographic — {selected_years[0]} Snapshot")
         if snap_geo.empty:
@@ -1084,7 +1414,7 @@ with tabs[4]:
                 )
 
 # --- Weeding ----------------------------------------------------------------
-with tabs[5]:
+with tabs["Weeding"]:
     st.subheader("Weeding Candidates (Usage Decay)")
     if is_snapshot:
         st.info(
@@ -1129,7 +1459,7 @@ with tabs[5]:
         )
 
 # --- E-Book Candidates ------------------------------------------------------
-with tabs[6]:
+with tabs["E-Book Candidates"]:
     st.subheader("E-Book Purchase Candidates")
     if is_snapshot:
         st.caption(
@@ -1155,7 +1485,7 @@ with tabs[6]:
 
 # --- Holdings weeding (conditional) -----------------------------------------
 if holdings_weed_df is not None:
-    with tabs[7]:
+    with tabs["Holdings Weeding"]:
         st.subheader("Holdings-Based Weeding: % Uncirculated by LC Subclass")
         st.caption(
             "Requires the holdings CSV. Subclasses ranked by the share of "
@@ -1216,7 +1546,7 @@ if holdings_weed_df is not None:
 # The last tab is the decision guide, always visible. Read from DECISION_GUIDE.md
 # on disk so the source of truth is a single markdown file that lives alongside
 # the app.
-with tabs[-1]:
+with tabs["📘 Guide"]:
     import os
     guide_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                               "DECISION_GUIDE.md")
