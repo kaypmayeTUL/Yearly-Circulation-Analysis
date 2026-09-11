@@ -7,6 +7,9 @@ and produces:
   1. LC Class change charts (overall + one per discipline) + CSVs
   2. LC Subclass change CSV (full detail)
   3. Subject term change charts (overall + one per discipline) + CSVs
+     (place-name variants such as "New Orleans" / "New Orleans (La.)" are
+     counted together; merges are listed in name_variant_merges_*.csv, and
+     possible variants left unmerged in possible_heading_variants_*.csv)
   4. Weeding candidate list (CSV)
   5. E-book purchase suggestion list (CSV)
 
@@ -22,6 +25,9 @@ import os
 import re
 import string
 import sys
+import unicodedata
+from collections import Counter, defaultdict, namedtuple
+from functools import lru_cache
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -228,6 +234,382 @@ LC_SUBCLASS_DESC = {
 
 
 # ---------------------------------------------------------------------------
+# Place names: variant forms -> one canonical form
+#
+# The same place is written several ways across a catalog's history:
+#   "New Orleans"          (legacy, unqualified head term)
+#   "New Orleans (La.)"    (current LC form as a head term)
+#   "Louisiana--New Orleans" (current LC form as a geographic subdivision)
+#   "Portland (Oreg.)" vs "Portland (Or.)" (older vs. current qualifier)
+#   "Sub-Saharan Africa" vs "Africa, Sub-Saharan" (variant vs. authorized)
+# Counting those separately splits one real trend into two fake ones — one
+# heading form "declining" while the other "rises" as records are recataloged.
+# Everything below resolves them to one form before any loans are counted.
+#
+# Deliberately NOT merged, because the bare form is genuinely ambiguous or the
+# names denote different entities in LCSH:
+#   "New York" (state or city) · "Washington" (state or D.C.) · "Portland"
+#   (Or. or Me.) · "Georgia" (state or country — treated as the state, as
+#   before) · "Korea" vs "Korea (South)" · "Russia" vs "Soviet Union" ·
+#   "Czech Republic" vs "Czechoslovakia" · "England" vs "Great Britain".
+# Add local variants to _PLACE_ALIASES or _US_BARE_CITIES as they surface.
+# ---------------------------------------------------------------------------
+
+# US state -> current LC qualifier abbreviation (the canonical qualifier).
+# State names match the LCSH forms used as geographic subdivisions, so
+# "New York (State)" and "Washington (State)" keep their qualifiers.
+_STATE_TO_QUALIFIER = {
+    "Alabama": "Ala.", "Alaska": "Alaska", "Arizona": "Ariz.", "Arkansas": "Ark.",
+    "California": "Calif.", "Colorado": "Colo.", "Connecticut": "Conn.",
+    "Delaware": "Del.", "Florida": "Fla.", "Georgia": "Ga.", "Hawaii": "Hawaii",
+    "Idaho": "Idaho", "Illinois": "Ill.", "Indiana": "Ind.", "Iowa": "Iowa",
+    "Kansas": "Kan.", "Kentucky": "Ky.", "Louisiana": "La.", "Maine": "Me.",
+    "Maryland": "Md.", "Massachusetts": "Mass.", "Michigan": "Mich.",
+    "Minnesota": "Minn.", "Mississippi": "Miss.", "Missouri": "Mo.",
+    "Montana": "Mont.", "Nebraska": "Neb.", "Nevada": "Nev.",
+    "New Hampshire": "N.H.", "New Jersey": "N.J.", "New Mexico": "N.M.",
+    "New York (State)": "N.Y.", "North Carolina": "N.C.", "North Dakota": "N.D.",
+    "Ohio": "Ohio", "Oklahoma": "Okla.", "Oregon": "Or.", "Pennsylvania": "Pa.",
+    "Rhode Island": "R.I.", "South Carolina": "S.C.", "South Dakota": "S.D.",
+    "Tennessee": "Tenn.", "Texas": "Tex.", "Utah": "Utah", "Vermont": "Vt.",
+    "Virginia": "Va.", "Washington (State)": "Wash.", "West Virginia": "W. Va.",
+    "Wisconsin": "Wis.", "Wyoming": "Wyo.",
+}
+
+# Qualifier (current or legacy form) -> state name
+_QUALIFIER_TO_STATE = {q: s for s, q in _STATE_TO_QUALIFIER.items()}
+_QUALIFIER_TO_STATE.update({
+    "N. Mex.": "New Mexico", "Oreg.": "Oregon", "Kans.": "Kansas", "Nebr.": "Nebraska",
+})
+_US_STATE_NAMES = frozenset(_STATE_TO_QUALIFIER)
+
+# Unambiguous US cities that appear bare in legacy records -> state
+_US_BARE_CITIES = {
+    "New Orleans": "Louisiana", "Chicago": "Illinois", "Los Angeles": "California",
+    "San Francisco": "California", "Boston": "Massachusetts",
+    "Philadelphia": "Pennsylvania", "Atlanta": "Georgia", "Detroit": "Michigan",
+    "Baltimore": "Maryland", "Seattle": "Washington (State)", "Miami": "Florida",
+    "Houston": "Texas", "Dallas": "Texas", "Baton Rouge": "Louisiana",
+}
+
+# Variant name -> LCSH authorized form (applied to whole '--' parts only)
+_PLACE_ALIASES = {
+    "United States of America": "United States",
+    "U.S": "United States",
+    "United Kingdom": "Great Britain",
+    "Sub-Saharan Africa": "Africa, Sub-Saharan",
+    "Pacific Northwest": "Northwest, Pacific",
+    "South (U.S.)": "Southern States",
+    "Midwest": "Middle West",
+    "Ivory Coast": "C\u00f4te d'Ivoire",
+    "Washington, D.C": "Washington (D.C.)",
+    "New York, N.Y": "New York (N.Y.)",
+}
+
+# Canonical place names recognized when they appear as a heading part.
+# US cities and other places with a state qualifier ("Lafayette (La.)") are
+# recognized from the qualifier itself and don't need to be listed.
+_US_REGIONS = frozenset([
+    "United States", "Southern States", "New England", "Middle West",
+    "Northwest, Pacific", "Northeastern States", "Northwestern States",
+    "Southeastern States", "Southwestern States", "Great Plains",
+    "Mountain States", "Atlantic States", "Appalachian Region", "Gulf States",
+    "Great Lakes", "West (U.S.)", "Washington (D.C.)", "New York (N.Y.)",
+])
+_EUROPE = frozenset([
+    "France", "Germany", "Italy", "Spain", "Portugal", "Great Britain",
+    "England", "Scotland", "Wales", "Ireland", "Netherlands", "Belgium",
+    "Switzerland", "Austria", "Poland", "Russia", "Soviet Union", "Sweden",
+    "Norway", "Denmark", "Finland", "Greece", "Turkey", "Hungary",
+    "Czech Republic", "Czechoslovakia", "Romania", "Bulgaria", "Ukraine",
+    "Serbia", "Croatia", "Slovenia", "Slovakia", "Iceland", "Estonia", "Latvia",
+    "Lithuania", "Belarus", "Luxembourg", "Europe", "Western Europe",
+    "Eastern Europe", "Central Europe", "Scandinavia", "Balkans",
+    "Baltic States", "Mediterranean Region", "Iberian Peninsula",
+])
+_MIDEAST = frozenset([
+    "Israel", "Palestine", "West Bank", "Gaza Strip", "Iran", "Iraq", "Syria",
+    "Lebanon", "Jordan", "Saudi Arabia", "Yemen", "Egypt", "Kuwait", "Qatar",
+    "Bahrain", "Oman", "United Arab Emirates", "Middle East",
+    "Persian Gulf Region",
+])
+_ASIA = frozenset([
+    "China", "Japan", "Korea", "Korea (South)", "Korea (North)", "India",
+    "Pakistan", "Bangladesh", "Vietnam", "Thailand", "Indonesia", "Philippines",
+    "Malaysia", "Singapore", "Afghanistan", "Nepal", "Sri Lanka", "Myanmar",
+    "Cambodia", "Laos", "Mongolia", "Taiwan", "Asia", "East Asia",
+    "Southeast Asia", "South Asia", "Central Asia", "Kazakhstan", "Uzbekistan",
+])
+_AFRICA = frozenset([
+    "South Africa", "Nigeria", "Kenya", "Ethiopia", "Ghana", "Morocco",
+    "Algeria", "Tunisia", "Libya", "Sudan", "Somalia", "Zimbabwe", "Uganda",
+    "Tanzania", "Rwanda", "Mozambique", "Angola", "Cameroon", "Senegal", "Mali",
+    "Namibia", "Botswana", "Zambia", "Malawi", "C\u00f4te d'Ivoire", "Africa",
+    "Africa, Sub-Saharan", "West Africa", "East Africa", "North Africa",
+    "Southern Africa",
+])
+_AMERICAS = frozenset([
+    "Canada", "Mexico", "Brazil", "Argentina", "Chile", "Colombia", "Peru",
+    "Venezuela", "Ecuador", "Bolivia", "Uruguay", "Paraguay", "Guatemala",
+    "Honduras", "El Salvador", "Nicaragua", "Costa Rica", "Panama", "Cuba",
+    "Dominican Republic", "Haiti", "Jamaica", "Puerto Rico", "North America",
+    "South America", "Central America", "Latin America", "Caribbean Area",
+    "West Indies",
+])
+_OCEANIA = frozenset(["Australia", "New Zealand", "Fiji", "Papua New Guinea", "Oceania"])
+
+# Bare "New York" and "Washington" stay detectable (as before) but unmerged.
+_KNOWN_GEOGRAPHIES = (
+    _US_STATE_NAMES | _US_REGIONS | _EUROPE | _MIDEAST | _ASIA | _AFRICA
+    | _AMERICAS | _OCEANIA | {"New York", "Washington"}
+)
+
+# "Name (Qualifier)" — the qualifier is the last parenthesized group
+_QUALIFIED_PAT = re.compile(r"^(?P<name>.*\S)\s*\((?P<qual>[^()]+)\)$")
+
+# (state, place) pairs that let a bare place in LC's subdivision form
+# ("Ohio--Columbus") resolve to its qualified form ("Columbus (Ohio)").
+# Seeded with the bare-city list; configure_name_index() adds every pair the
+# loaded data proves by containing the qualified form somewhere, so a topical
+# subdivision ("Louisiana--History") can never be mistaken for a place.
+_SEED_PLACES_IN_STATE = frozenset(
+    {(state, city) for city, state in _US_BARE_CITIES.items()}
+    | {("New York (State)", "New York")}
+)
+_PLACES_IN_STATE = set(_SEED_PLACES_IN_STATE)
+
+# Casefolded heading -> the spelling used for it everywhere (the form most
+# common in the data). Only headings that occur in more than one
+# capitalization are listed. Set by configure_name_index().
+_HEADING_FORMS = {}
+
+NameIndex = namedtuple("NameIndex", ["place_pairs", "heading_forms"])
+
+_SPACE_BEFORE_PUNCT = re.compile(r"\s+([,;:.)\]])")
+_SPACE_AFTER_OPEN = re.compile(r"([(\[])\s+")
+
+
+@lru_cache(maxsize=None)
+def _tidy_part(part):
+    """Collapse whitespace, remove spaces before punctuation, drop edge punctuation."""
+    p = " ".join(str(part).split())
+    p = _SPACE_BEFORE_PUNCT.sub(r"\1", p)
+    p = _SPACE_AFTER_OPEN.sub(r"\1", p)
+    return p.strip(" .,;:")
+
+
+@lru_cache(maxsize=None)
+def _clean_part(part):
+    """_tidy_part after Unicode normalization, so a precomposed "\u00e9" and
+    "e" + combining accent are the same string."""
+    return _tidy_part(unicodedata.normalize("NFC", str(part)))
+
+
+def _split_parts(heading):
+    """Split a heading into '--' parts, treating an em dash as the same delimiter."""
+    return unicodedata.normalize("NFC", str(heading)).replace("\u2014", "--").split("--")
+
+
+@lru_cache(maxsize=None)
+def resolve_place(part):
+    """
+    Resolve one '--' part of a subject heading to a canonical place.
+
+    Returns (place, parent_state, within_qualifier):
+      place             canonical name, or None if the part isn't a place
+      parent_state      US state the place sits in (None for states,
+                        countries, and regions)
+      within_qualifier  True for "Treme (New Orleans, La.)"-style parts, where
+                        the qualifier names the city a smaller place sits in;
+                        `place` is then that city.
+
+    Examples:
+      "New Orleans"             -> ("New Orleans (La.)", "Louisiana", False)
+      "New Orleans (La.)"       -> ("New Orleans (La.)", "Louisiana", False)
+      "Portland (Oreg.)"        -> ("Portland (Or.)", "Oregon", False)
+      "Treme (New Orleans, La.)"-> ("New Orleans (La.)", "Louisiana", True)
+      "Sub-Saharan Africa"      -> ("Africa, Sub-Saharan", None, False)
+      "History"                 -> (None, None, False)
+    """
+    p = _clean_part(part)
+    p = _PLACE_ALIASES.get(p, p)
+    m = _QUALIFIED_PAT.match(p)
+    if m:
+        name, qual = m.group("name"), m.group("qual").strip()
+        if "," in qual:
+            city, q = (x.strip() for x in qual.rsplit(",", 1))
+            state = _QUALIFIER_TO_STATE.get(q)
+            if state:
+                return f"{city} ({_STATE_TO_QUALIFIER[state]})", state, True
+        state = _QUALIFIER_TO_STATE.get(qual)
+        if state:
+            return f"{name} ({_STATE_TO_QUALIFIER[state]})", state, False
+    if p in _US_BARE_CITIES:
+        state = _US_BARE_CITIES[p]
+        return f"{p} ({_STATE_TO_QUALIFIER[state]})", state, False
+    if p in _KNOWN_GEOGRAPHIES:
+        return p, None, False
+    return None, None, False
+
+
+def _resolve_parts(heading, pairs=None):
+    """
+    Resolve every '--' part of one heading, using the preceding part as
+    context: a bare name right after a US state resolves as a place in that
+    state when the pair is known ("New York (State)--New York" ->
+    "New York (N.Y.)"). Returns [(cleaned_part, place, state, within), ...].
+    """
+    pairs = _PLACES_IN_STATE if pairs is None else pairs
+    out, prev_state = [], None
+    for raw in _split_parts(heading):
+        p = _clean_part(raw)
+        if not p:
+            continue
+        place, state, within = resolve_place(p)
+        if prev_state and state is None and not within:
+            bare = place or p
+            if (prev_state, bare) in pairs:
+                place = f"{bare} ({_STATE_TO_QUALIFIER[prev_state]})"
+                state = prev_state
+        out.append((p, place, state, within))
+        prev_state = place if (place in _US_STATE_NAMES and state is None) else None
+    return out
+
+
+def _heading_stages(heading, pairs, forms):
+    """
+    Run one heading through each normalization step and return every stage:
+      (tidied, encoded, placed, final)
+      tidied   whitespace and stray punctuation cleaned only
+      encoded  + Unicode normalization and em dashes read as '--'
+      placed   + place-name variants resolved (see canonicalize_heading)
+      final    + capitalization unified to the data's most common spelling
+    Keeping the stages lets the audit report say why a form was merged.
+    """
+    tidied = "--".join(p for p in (_tidy_part(x) for x in str(heading).split("--")) if p)
+    resolved = _resolve_parts(heading, pairs)
+    encoded = "--".join(part for part, _, _, _ in resolved)
+    out = []
+    for i, (part, place, state, within) in enumerate(resolved):
+        if place is None or within:
+            out.append(part)
+        elif state is None or i == 0:
+            out.append(place)
+        else:
+            if not out or out[-1] != state:
+                out.append(state)
+            out.append(place.rsplit(" (", 1)[0])
+    placed = "--".join(out)
+    final = forms.get(placed.casefold(), placed)
+    return tidied, encoded, placed, final
+
+
+def learn_name_index(subjects):
+    """
+    Learn everything name merging needs from a Subjects column. Pure function.
+
+      place_pairs    (state, place) pairs from every state-qualified place in
+                     the data, plus the seed pairs: "Lafayette (La.)" anywhere
+                     lets "Louisiana--Lafayette" resolve to it.
+      heading_forms  for headings written in more than one capitalization,
+                     the spelling to use: LC-style capitalization first (each
+                     part starts with a capital, no all-caps), then the form
+                     carried by the most rows.
+    """
+    counts = pd.Series(subjects).dropna().astype(str).value_counts()
+    pairs = set(_SEED_PLACES_IN_STATE)
+    for subj in counts.index:
+        for chunk in subj.split(";"):
+            for raw in _split_parts(chunk):
+                place, state, _ = resolve_place(raw)
+                if state:
+                    pairs.add((state, place.rsplit(" (", 1)[0]))
+    pairs = frozenset(pairs)
+
+    spellings = defaultdict(Counter)
+    for subj, n in counts.items():
+        for chunk in subj.split(";"):
+            chunk = chunk.strip().rstrip(".,;: ").strip()
+            if chunk:
+                placed = _heading_stages(chunk, pairs, {})[2]
+                if placed:
+                    spellings[placed.casefold()][placed] += n
+    def lc_style(form):
+        # LC capitalizes the first letter of every part and doesn't use all caps
+        return sum(1 for p in form.split("--") if p[:1].isupper() and not p.isupper())
+
+    forms = {
+        key: max(c.items(), key=lambda kv: (lc_style(kv[0]), kv[1], kv[0]))[0]
+        for key, c in spellings.items() if len(c) > 1
+    }
+    return NameIndex(pairs, forms)
+
+
+def configure_name_index(source):
+    """
+    Set the place pairs and heading spellings used by every subject and
+    geographic parser — from a DataFrame/Series of Subjects, or from a
+    NameIndex already returned by learn_name_index(). Call once per data
+    load, like configure_fy_window(), before any parsing. Returns the index.
+    """
+    if isinstance(source, NameIndex):
+        index = source
+    else:
+        subjects = source["Subjects"] if isinstance(source, pd.DataFrame) else source
+        index = learn_name_index(subjects)
+    changed = False
+    if index.place_pairs != _PLACES_IN_STATE:
+        _PLACES_IN_STATE.clear()
+        _PLACES_IN_STATE.update(index.place_pairs)
+        changed = True
+    if index.heading_forms != _HEADING_FORMS:
+        _HEADING_FORMS.clear()
+        _HEADING_FORMS.update(index.heading_forms)
+        changed = True
+    if changed:
+        canonicalize_heading.cache_clear()
+    return index
+
+
+@lru_cache(maxsize=None)
+def canonicalize_heading(heading):
+    """
+    Return the single form a full LC heading is counted under.
+
+    Formatting differences are merged: Unicode encoding ("Treme" typed with a
+    precomposed vs. combining accent), em dashes used as subdivision
+    delimiters, stray spaces and punctuation, and capitalization.
+
+    Place-name variants are merged following LC practice for where the place
+    sits in the string:
+      head term     -> qualified form     "New Orleans--History"
+                                          -> "New Orleans (La.)--History"
+      subdivision   -> State--Place form  "Jazz--New Orleans (La.)"
+                                          -> "Jazz--Louisiana--New Orleans"
+    Places qualified by a containing city ("Treme (New Orleans, La.)") are
+    left as written — they're a different, smaller place.
+
+    Retired or near-duplicate headings are never merged here; see
+    possible_heading_variants().
+    """
+    return _heading_stages(heading, _PLACES_IN_STATE, _HEADING_FORMS)[3]
+
+
+def heading_terms(heading):
+    """
+    Split a full heading on '--' into terms, returning places in canonical
+    form so a place counts as one term whether it appeared as a head term or
+    a subdivision: "Jazz--Louisiana--New Orleans" -> ["Jazz", "Louisiana",
+    "New Orleans (La.)"]. Duplicate terms within one heading appear once.
+    """
+    if not isinstance(heading, str):
+        return []
+    terms = [place if (place and not within) else part
+             for part, place, _, within in _resolve_parts(heading)]
+    return list(dict.fromkeys(terms))
+
+
+# ---------------------------------------------------------------------------
 # Subject parsing
 # ---------------------------------------------------------------------------
 
@@ -245,6 +627,12 @@ def parse_full_headings(subject_str):
     than reduced to the head term, so a subject like 'Politics and government--
     United States' stays distinct from 'Politics and government--France' rather
     than both collapsing into 'Politics and government'.
+
+    Formatting and place-name variants are merged first (see
+    canonicalize_heading), so "New Orleans--History" and
+    "New Orleans (La.)--History" count as one heading, as do "Jazz--History"
+    and "Jazz--history". A heading that appears twice on one record is
+    returned once, so its loans aren't double-counted.
     """
     if pd.isna(subject_str) or not str(subject_str).strip():
         return []
@@ -252,193 +640,38 @@ def parse_full_headings(subject_str):
     for chunk in str(subject_str).split(";"):
         chunk = chunk.strip().rstrip(".,;: ").strip()
         if chunk:
-            headings.append(chunk)
-    return headings
+            canon = canonicalize_heading(chunk)
+            if canon:
+                headings.append(canon)
+    return list(dict.fromkeys(headings))
 
 
 # ---------------------------------------------------------------------------
 # Geographic term detection
-#
-# The lists below are non-exhaustive by design — they cover the geographic
-# entities that appear repeatedly in academic-library subject fields. Add more
-# as gaps surface. Note that "Georgia" is intentionally excluded from countries
-# because it's ambiguous with the US state; if you want the country, add
-# "Georgia (Republic)" or similar disambiguation to your local list.
 # ---------------------------------------------------------------------------
 
-_US_STATE_ABBREVS = frozenset([
-    "Ala.", "Alaska", "Ariz.", "Ark.", "Calif.", "Colo.", "Conn.", "D.C.",
-    "Del.", "Fla.", "Ga.", "Hawaii", "Idaho", "Ill.", "Ind.", "Iowa", "Kan.",
-    "Ky.", "La.", "Mass.", "Md.", "Me.", "Mich.", "Minn.", "Miss.", "Mo.",
-    "Mont.", "N.C.", "N.D.", "N.H.", "N.J.", "N. Mex.", "N.Y.", "Neb.",
-    "Nev.", "Ohio", "Okla.", "Oreg.", "Pa.", "R.I.", "S.C.", "S.D.", "Tenn.",
-    "Tex.", "U.S.", "Utah", "Va.", "Vt.", "W. Va.", "Wash.", "Wis.", "Wyo.",
-])
-
-_ABBREV_TO_STATE = {
-    "Ala.": "Alabama", "Ariz.": "Arizona", "Ark.": "Arkansas",
-    "Calif.": "California", "Colo.": "Colorado", "Conn.": "Connecticut",
-    "D.C.": "Washington (D.C.)", "Del.": "Delaware", "Fla.": "Florida",
-    "Ga.": "Georgia", "Ill.": "Illinois", "Ind.": "Indiana",
-    "Kan.": "Kansas", "Ky.": "Kentucky", "La.": "Louisiana",
-    "Mass.": "Massachusetts", "Md.": "Maryland", "Me.": "Maine",
-    "Mich.": "Michigan", "Minn.": "Minnesota", "Miss.": "Mississippi",
-    "Mo.": "Missouri", "Mont.": "Montana", "N.C.": "North Carolina",
-    "N.D.": "North Dakota", "N.H.": "New Hampshire", "N.J.": "New Jersey",
-    "N. Mex.": "New Mexico", "N.Y.": "New York (State)", "Neb.": "Nebraska",
-    "Nev.": "Nevada", "Okla.": "Oklahoma", "Oreg.": "Oregon",
-    "Pa.": "Pennsylvania", "R.I.": "Rhode Island", "S.C.": "South Carolina",
-    "S.D.": "South Dakota", "Tenn.": "Tennessee", "Tex.": "Texas",
-    "U.S.": "United States", "Va.": "Virginia", "Vt.": "Vermont",
-    "W. Va.": "West Virginia", "Wash.": "Washington (State)",
-    "Wis.": "Wisconsin", "Wyo.": "Wyoming",
-}
-
-_KNOWN_GEOGRAPHIES = frozenset([
-    # US: full state names
-    "Alabama", "Alaska", "Arizona", "Arkansas", "California", "Colorado",
-    "Connecticut", "Delaware", "Florida", "Georgia", "Hawaii", "Idaho",
-    "Illinois", "Indiana", "Iowa", "Kansas", "Kentucky", "Louisiana",
-    "Maine", "Maryland", "Massachusetts", "Michigan", "Minnesota",
-    "Mississippi", "Missouri", "Montana", "Nebraska", "Nevada",
-    "New Hampshire", "New Jersey", "New Mexico", "New York", "New York (State)",
-    "North Carolina", "North Dakota", "Ohio", "Oklahoma", "Oregon",
-    "Pennsylvania", "Rhode Island", "South Carolina", "South Dakota",
-    "Tennessee", "Texas", "Utah", "Vermont", "Virginia", "Washington",
-    "Washington (D.C.)", "Washington (State)", "West Virginia",
-    "Wisconsin", "Wyoming",
-    # US: country + regions
-    "United States", "United States of America",
-    "Southern States", "New England", "Middle West", "Pacific Northwest",
-    "Northeastern States", "Northwestern States", "Southeastern States",
-    "Southwestern States", "Great Plains", "Mountain States",
-    "Atlantic States", "Appalachian Region", "Gulf States", "Great Lakes",
-    "West (U.S.)", "South (U.S.)", "Northwest, Pacific",
-    # US: major cities that recur in LC subject headings
-    "New Orleans", "New Orleans (La.)", "New York (N.Y.)", "Chicago (Ill.)",
-    "Los Angeles (Calif.)", "San Francisco (Calif.)", "Boston (Mass.)",
-    "Philadelphia (Pa.)", "Atlanta (Ga.)", "Detroit (Mich.)",
-    "Baltimore (Md.)", "Seattle (Wash.)", "Miami (Fla.)",
-    "Houston (Tex.)", "Dallas (Tex.)", "Portland (Or.)",
-    # Europe (countries)
-    "France", "Germany", "Italy", "Spain", "Portugal", "United Kingdom",
-    "Great Britain", "England", "Scotland", "Wales", "Ireland", "Netherlands",
-    "Belgium", "Switzerland", "Austria", "Poland", "Russia", "Soviet Union",
-    "Sweden", "Norway", "Denmark", "Finland", "Greece", "Turkey", "Hungary",
-    "Czech Republic", "Czechoslovakia", "Romania", "Bulgaria", "Ukraine",
-    "Serbia", "Croatia", "Slovenia", "Slovakia", "Iceland", "Estonia",
-    "Latvia", "Lithuania", "Belarus", "Luxembourg",
-    # Europe (regions)
-    "Europe", "Western Europe", "Eastern Europe", "Central Europe",
-    "Scandinavia", "Balkans", "Baltic States", "Mediterranean Region",
-    "Iberian Peninsula",
-    # Middle East
-    "Israel", "Palestine", "West Bank", "Gaza Strip", "Iran", "Iraq",
-    "Syria", "Lebanon", "Jordan", "Saudi Arabia", "Yemen",
-    "Egypt", "Kuwait", "Qatar", "Bahrain", "Oman", "United Arab Emirates",
-    "Middle East", "Persian Gulf Region",
-    # Asia
-    "China", "Japan", "Korea", "Korea (South)", "Korea (North)",
-    "India", "Pakistan", "Bangladesh", "Vietnam", "Thailand", "Indonesia",
-    "Philippines", "Malaysia", "Singapore", "Afghanistan", "Nepal",
-    "Sri Lanka", "Myanmar", "Cambodia", "Laos", "Mongolia", "Taiwan",
-    "Asia", "East Asia", "Southeast Asia", "South Asia", "Central Asia",
-    "Kazakhstan", "Uzbekistan",
-    # Africa
-    "South Africa", "Nigeria", "Kenya", "Ethiopia", "Ghana", "Morocco",
-    "Algeria", "Tunisia", "Libya", "Sudan", "Somalia", "Zimbabwe", "Uganda",
-    "Tanzania", "Rwanda", "Mozambique", "Angola", "Cameroon", "Senegal",
-    "Mali", "Namibia", "Botswana", "Zambia", "Malawi", "Ivory Coast",
-    "Africa", "Sub-Saharan Africa", "Africa, Sub-Saharan",
-    "West Africa", "East Africa", "North Africa", "Southern Africa",
-    # Americas
-    "Canada", "Mexico", "Brazil", "Argentina", "Chile", "Colombia", "Peru",
-    "Venezuela", "Ecuador", "Bolivia", "Uruguay", "Paraguay", "Guatemala",
-    "Honduras", "El Salvador", "Nicaragua", "Costa Rica", "Panama", "Cuba",
-    "Dominican Republic", "Haiti", "Jamaica", "Puerto Rico",
-    "North America", "South America", "Central America", "Latin America",
-    "Caribbean Area", "West Indies",
-    # Oceania
-    "Australia", "New Zealand", "Fiji", "Papua New Guinea", "Oceania",
-])
-
-# Regex to catch parenthesized US state abbreviations mid-string
-# e.g. "New Orleans (La.)" or "Chicago (Ill.)"
-_PAREN_ABBREV_PAT = re.compile(
-    r"\(([A-Z][A-Za-z]{0,3}\.(?:\s*[A-Z][A-Za-z]{0,3}\.)*)\)"
-)
-
-
 def _classify_geography_region(name):
-    """Coarse continent-level bucket for a geographic entity."""
-    us_bare_cities = {"New Orleans", "New York", "Chicago", "Los Angeles",
-                      "San Francisco", "Boston", "Philadelphia", "Atlanta",
-                      "Detroit", "Baltimore", "Seattle", "Miami", "Houston",
-                      "Dallas", "Portland"}
-    if name in us_bare_cities:
+    """Coarse continent-level bucket for a canonical geographic entity."""
+    if name in _US_STATE_NAMES or name in _US_REGIONS:
         return "United States"
-    if name in {"United States", "United States of America",
-                "Washington (D.C.)"} or name in _ABBREV_TO_STATE.values():
+    m = _QUALIFIED_PAT.match(name)
+    if m and (m.group("qual").strip() in _QUALIFIER_TO_STATE
+              or m.group("qual").strip() == "U.S."):
         return "United States"
-    if name in {"Southern States", "New England", "Middle West",
-                "Pacific Northwest", "Northeastern States",
-                "Northwestern States", "Southeastern States",
-                "Southwestern States", "Great Plains", "Mountain States",
-                "Atlantic States", "Appalachian Region", "Gulf States",
-                "Great Lakes", "West (U.S.)", "South (U.S.)"}:
-        return "United States"
-    if any(name.endswith(f"({abbr})") for abbr in _US_STATE_ABBREVS):
-        return "United States"
-    europe = {"France", "Germany", "Italy", "Spain", "Portugal",
-              "United Kingdom", "Great Britain", "England", "Scotland",
-              "Wales", "Ireland", "Netherlands", "Belgium", "Switzerland",
-              "Austria", "Poland", "Russia", "Soviet Union", "Sweden",
-              "Norway", "Denmark", "Finland", "Greece", "Turkey", "Hungary",
-              "Czech Republic", "Czechoslovakia", "Romania", "Bulgaria",
-              "Ukraine", "Serbia", "Croatia", "Slovenia", "Slovakia",
-              "Iceland", "Estonia", "Latvia", "Lithuania", "Belarus",
-              "Luxembourg", "Europe", "Western Europe", "Eastern Europe",
-              "Central Europe", "Scandinavia", "Balkans", "Baltic States",
-              "Mediterranean Region", "Iberian Peninsula"}
-    if name in europe:
+    if name in _EUROPE:
         return "Europe"
-    mideast = {"Israel", "Palestine", "West Bank", "Gaza Strip", "Iran",
-               "Iraq", "Syria", "Lebanon", "Jordan", "Saudi Arabia", "Yemen",
-               "Egypt", "Kuwait", "Qatar", "Bahrain", "Oman",
-               "United Arab Emirates", "Middle East", "Persian Gulf Region"}
-    if name in mideast:
+    if name in _MIDEAST:
         return "Middle East / North Africa"
-    asia = {"China", "Japan", "Korea", "Korea (South)", "Korea (North)",
-            "India", "Pakistan", "Bangladesh", "Vietnam", "Thailand",
-            "Indonesia", "Philippines", "Malaysia", "Singapore",
-            "Afghanistan", "Nepal", "Sri Lanka", "Myanmar", "Cambodia",
-            "Laos", "Mongolia", "Taiwan", "Asia", "East Asia",
-            "Southeast Asia", "South Asia", "Central Asia", "Kazakhstan",
-            "Uzbekistan"}
-    if name in asia:
+    if name in _ASIA:
         return "Asia"
-    africa = {"South Africa", "Nigeria", "Kenya", "Ethiopia", "Ghana",
-              "Morocco", "Algeria", "Tunisia", "Libya", "Sudan", "Somalia",
-              "Zimbabwe", "Uganda", "Tanzania", "Rwanda", "Mozambique",
-              "Angola", "Cameroon", "Senegal", "Mali", "Namibia",
-              "Botswana", "Zambia", "Malawi", "Ivory Coast", "Africa",
-              "Sub-Saharan Africa", "Africa, Sub-Saharan", "West Africa",
-              "East Africa", "North Africa", "Southern Africa"}
-    if name in africa:
+    if name in _AFRICA:
         return "Africa"
-    americas = {"Canada", "Mexico", "Brazil", "Argentina", "Chile",
-                "Colombia", "Peru", "Venezuela", "Ecuador", "Bolivia",
-                "Uruguay", "Paraguay", "Guatemala", "Honduras", "El Salvador",
-                "Nicaragua", "Costa Rica", "Panama", "Cuba",
-                "Dominican Republic", "Haiti", "Jamaica", "Puerto Rico",
-                "North America", "South America", "Central America",
-                "Latin America", "Caribbean Area", "West Indies"}
-    if name in americas:
+    if name in _AMERICAS:
         return "Americas (non-US)"
-    oceania = {"Australia", "New Zealand", "Fiji", "Papua New Guinea",
-               "Oceania"}
-    if name in oceania:
+    if name in _OCEANIA:
         return "Oceania"
+    if name in {"New York", "Washington"}:
+        return "United States"
     return "Other/Unclassified"
 
 
@@ -446,43 +679,213 @@ def parse_geographic_terms(subject_str):
     """
     Extract geographic entities mentioned anywhere in a MARC-style Subjects field.
 
-    Returns a de-duplicated list so a title mentioning 'Louisiana' in three
-    different subject strings still counts toward Louisiana just once.
+    Returns a de-duplicated list of canonical place names, so a title mentioning
+    Louisiana in three different subject strings still counts toward Louisiana
+    just once, and "New Orleans", "New Orleans (La.)", and
+    "Louisiana--New Orleans" all count as "New Orleans (La.)".
 
-    Detection:
-      1. Any `--`-separated part that exactly matches a known geographic entity
-      2. Any parenthesized US-state abbreviation like '(La.)' or '(N.Y.)' —
-         emits both the state name and the parent city string if present
-      3. Head terms that are US-state-qualified cities (e.g. 'New Orleans (La.)')
+    Detection, per '--' part (see resolve_place):
+      1. Known places (states, countries, regions), after alias resolution
+      2. Places with a US state qualifier: "Lafayette (La.)", "Columbus (Ohio)"
+         -> the place in canonical form plus its state
+      3. Smaller places qualified by city: "Treme (New Orleans, La.)"
+         -> the city plus its state
+      4. Unambiguous bare US cities: "New Orleans" -> "New Orleans (La.)" + state
+      5. LC subdivision form "State--Place" when the data also contains the
+         qualified form: "Ohio--Columbus" -> "Columbus (Ohio)" + Ohio
     """
     if pd.isna(subject_str) or not str(subject_str).strip():
         return []
 
     found = set()
     for chunk in str(subject_str).split(";"):
-        chunk = chunk.strip()
-        if not chunk:
-            continue
-
-        # Split into parts by '--'
-        for raw in chunk.split("--"):
-            part = raw.strip().rstrip(".,;: ").strip()
-            if not part:
-                continue
-
-            # Exact match against the known-geography set
-            if part in _KNOWN_GEOGRAPHIES:
-                found.add(part)
-
-            # Parenthesized state abbreviation → emit parent state name
-            for m in _PAREN_ABBREV_PAT.findall(part):
-                if m in _ABBREV_TO_STATE:
-                    found.add(_ABBREV_TO_STATE[m])
-                    # Also keep the full '(city (State))' form
-                    if part.endswith(f"({m})"):
-                        found.add(part)
-
+        for _, place, state, _ in _resolve_parts(chunk):
+            if place:
+                found.add(place)
+            if state:
+                found.add(state)
     return sorted(found)
+
+
+def name_variant_report(df, value_col="Loans (In House + Not In House)"):
+    """
+    Audit table of every heading or place form that was counted under a
+    different form. One row per (type, form in records, counted as), with the
+    reason, the number of distinct titles, and the loans carried by those
+    rows. Whitespace-only cleanups aren't listed.
+    """
+    cols = ["Type", "Counted as", "Form in records", "Reason", "Titles", "Loans"]
+    if "Subjects" not in df.columns or df.empty:
+        return pd.DataFrame(columns=cols)
+
+    records = []
+    for subj in df["Subjects"].dropna().unique():
+        pairs = set()
+        for chunk in str(subj).split(";"):
+            chunk = chunk.strip().rstrip(".,;: ").strip()
+            if not chunk:
+                continue
+            tidied, encoded, placed, final = _heading_stages(chunk, _PLACES_IN_STATE, _HEADING_FORMS)
+            if final != tidied:
+                reasons = []
+                if encoded != tidied:
+                    reasons.append("Character encoding or dash")
+                if placed != encoded:
+                    reasons.append("Place name form")
+                if final != placed:
+                    reasons.append("Capitalization")
+                pairs.add(("Subject heading", tidied, final, "; ".join(reasons)))
+            for p, place, _, within in _resolve_parts(chunk):
+                if place and not within and place != p:
+                    pairs.add(("Place", p, place, "Place name form"))
+        records.extend((subj, *pr) for pr in pairs)
+
+    if not records:
+        return pd.DataFrame(columns=cols)
+    m = pd.DataFrame(records, columns=["Subjects", "Type", "Form in records", "Counted as", "Reason"])
+    m = m.merge(df[["Subjects", "Title", value_col]], on="Subjects", how="left")
+    out = (
+        m.groupby(["Type", "Counted as", "Form in records", "Reason"])
+        .agg(Titles=("Title", "nunique"), Loans=(value_col, "sum"))
+        .reset_index()
+    )
+    out["Loans"] = out["Loans"].astype(int)
+    return out.sort_values(["Type", "Loans"], ascending=[False, False])[cols]
+
+
+# ---------------------------------------------------------------------------
+# Possible heading variants (flagged for review, never merged)
+# ---------------------------------------------------------------------------
+
+HEADING_CROSSWALK_FILE = "lcsh_heading_changes.csv"
+HeadingChange = namedtuple("HeadingChange", ["old", "new", "change_type", "year", "source", "note"])
+
+
+@lru_cache(maxsize=4)
+def load_heading_crosswalk(path=None):
+    """
+    Load the retired-heading crosswalk (lcsh_heading_changes.csv next to this
+    script by default). Columns: old_heading, new_heading (alternatives
+    separated by " | "), change_type (one-to-one / split), year, source, note.
+    "{x}" may start or end a heading to match a family of forms, e.g.
+    "Cookery, {x}" -> "{x} cooking". Returns () if the file is absent.
+    """
+    path = path or os.path.join(os.path.dirname(os.path.abspath(__file__)), HEADING_CROSSWALK_FILE)
+    if not os.path.exists(path):
+        return ()
+    table = pd.read_csv(path, dtype=str, keep_default_na=False)
+    required = {"old_heading", "new_heading", "change_type", "year", "source", "note"}
+    missing = required - set(table.columns)
+    if missing:
+        raise ValueError(f"{path} is missing columns: {sorted(missing)}")
+    entries = []
+    for r in table.itertuples(index=False):
+        old = " ".join(r.old_heading.split())
+        if old.count("{x}") > 1 or ("{x}" in old and not (old.startswith("{x}") or old.endswith("{x}"))):
+            raise ValueError(f"{path}: '{{x}}' must start or end the heading: {old!r}")
+        entries.append(HeadingChange(old, r.new_heading.strip(), r.change_type.strip(),
+                                     r.year.strip(), r.source.strip(), r.note.strip()))
+    return tuple(entries)
+
+
+def _crosswalk_matchers(crosswalk):
+    exact = {e.old.casefold(): e for e in crosswalk if "{x}" not in e.old}
+    patterns = []
+    for e in crosswalk:
+        if "{x}" in e.old:
+            body = "(?P<x>.+)".join(re.escape(piece) for piece in e.old.split("{x}"))
+            patterns.append((re.compile(f"^{body}$", re.IGNORECASE), e))
+    return exact, patterns
+
+
+def possible_heading_variants(df, crosswalk=None, value_col="Loans (In House + Not In House)"):
+    """
+    Flag headings that may be the same concept as another heading but are NOT
+    merged, for a person to review:
+
+      Retired LC heading     a heading part matches the crosswalk of headings
+                             LC has replaced. "Match in data" shows whether
+                             the replacement also occurs, i.e. whether one
+                             topic's use is currently split across two rows.
+      Hyphen or spacing      headings identical except for hyphens or spaces
+      variant                within a part ("Anti-Semitism" / "Antisemitism").
+
+    Operates on counted (canonical) headings, so formatting and place-name
+    merges are already applied.
+    """
+    cols = ["Reason", "Heading in data", "Titles", "Loans", "Possible match",
+            "Match in data", "Match loans", "LC change", "Note", "Source"]
+    if "Subjects" not in df.columns or df.empty:
+        return pd.DataFrame(columns=cols)
+    crosswalk = load_heading_crosswalk() if crosswalk is None else crosswalk
+
+    d = df[["Title", "Subjects", value_col]].copy()
+    d["_h"] = d["Subjects"].apply(parse_full_headings)
+    ex = d.explode("_h")
+    ex = ex[ex["_h"].notna() & (ex["_h"] != "")]
+    if ex.empty:
+        return pd.DataFrame(columns=cols)
+    stats = ex.groupby("_h").agg(Titles=("Title", "nunique"), Loans=(value_col, "sum"))
+    by_key = {h.casefold(): h for h in stats.index}
+    rows = []
+
+    exact, patterns = _crosswalk_matchers(crosswalk)
+    for h in stats.index:
+        parts = h.split("--")
+        for i, part in enumerate(parts):
+            hits = []
+            if part.casefold() in exact:
+                hits.append((exact[part.casefold()], None))
+            for rx, e in patterns:
+                m = rx.match(part)
+                if m:
+                    hits.append((e, m.group("x")))
+            for e, x in hits:
+                candidates = []
+                for alt in (a.strip() for a in e.new.split("|") if a.strip()):
+                    filled = alt.replace("{x}", x) if x is not None else alt
+                    candidates.append("--".join(parts[:i] + [filled] + parts[i + 1:]))
+                present = [by_key[c.casefold()] for c in candidates if c.casefold() in by_key]
+                rows.append({
+                    "Reason": "Retired LC heading" + (" (split)" if e.change_type == "split" else ""),
+                    "Heading in data": h,
+                    "Titles": int(stats.at[h, "Titles"]),
+                    "Loans": int(stats.at[h, "Loans"]),
+                    "Possible match": " | ".join(candidates),
+                    "Match in data": " | ".join(present) if present else "\u2014",
+                    "Match loans": int(stats.loc[present, "Loans"].sum()) if present else 0,
+                    "LC change": f"{e.old} \u2192 {e.new}" + (f" ({e.year})" if e.year else ""),
+                    "Note": e.note,
+                    "Source": e.source,
+                })
+
+    groups = defaultdict(list)
+    for h in stats.index:
+        key = "--".join(re.sub(r"[\s\-]+", "", p) for p in h.casefold().split("--"))
+        groups[key].append(h)
+    for hs in groups.values():
+        if len(hs) < 2:
+            continue
+        top = max(hs, key=lambda h: (stats.at[h, "Loans"], h))
+        for h in hs:
+            if h == top:
+                continue
+            rows.append({
+                "Reason": "Hyphen or spacing variant",
+                "Heading in data": h,
+                "Titles": int(stats.at[h, "Titles"]),
+                "Loans": int(stats.at[h, "Loans"]),
+                "Possible match": top,
+                "Match in data": top,
+                "Match loans": int(stats.at[top, "Loans"]),
+                "LC change": "", "Note": "", "Source": "",
+            })
+
+    if not rows:
+        return pd.DataFrame(columns=cols)
+    out = pd.DataFrame(rows)[cols].drop_duplicates(subset=["Reason", "Heading in data", "Possible match"])
+    out["_live"] = out["Match in data"] != "\u2014"
+    return out.sort_values(["_live", "Loans"], ascending=[False, False]).drop(columns="_live")
 
 
 # ---------------------------------------------------------------------------
@@ -732,6 +1135,10 @@ def load_data(path):
     # keys off the actual data instead of hardcoded years.
     fy_cols = configure_fy_window(df)
     print(f"  Detected fiscal-year window: {fy_cols}")
+    # Learn place pairs and heading spellings so name variants merge before counting.
+    index = configure_name_index(df)
+    print(f"  Learned {len(index.place_pairs - _SEED_PLACES_IN_STATE):,} place-within-state "
+          f"pair(s) and {len(index.heading_forms):,} multi-capitalization heading(s)")
     if len(fy_cols) < 2:
         raise ValueError(
             f"Standalone script needs at least 2 fiscal years for trend "
@@ -917,6 +1324,7 @@ def run_geographic_analysis(df, outdir, top_up=12, top_down=12,
     print("\n== Geographic trends analysis ==")
 
     df = df.copy()
+    df["_row"] = np.arange(len(df))
     df["Geographies"] = df["Subjects"].apply(parse_geographic_terms)
     exploded = df.explode("Geographies").rename(
         columns={"Geographies": "Geography"}
@@ -949,7 +1357,9 @@ def run_geographic_analysis(df, outdir, top_up=12, top_down=12,
     print(f"  -> {geo_csv}")
 
     # -- Continent-level roll-up ----------------------------------------
-    region_df = pivot_by_year(exploded, "Region")
+    # One count per record per region: a book about Louisiana and New Orleans
+    # adds its loans to "United States" once, not once per place it mentions.
+    region_df = pivot_by_year(exploded.drop_duplicates(["_row", "Region"]), "Region")
     region_df = region_df[
         ["Region", *FY_COLS,
          "Mean Annual Loans", "Trend Slope (loans/yr)", "Trend R^2",
@@ -995,6 +1405,28 @@ def run_geographic_analysis(df, outdir, top_up=12, top_down=12,
     )
 
     return geo_df
+
+
+def run_name_variant_report(df, outdir):
+    """
+    Write the two audit tables behind the subject and geographic numbers:
+      name_variant_merges_*.csv        forms that were counted together
+      possible_heading_variants_*.csv  possible variants that were NOT merged
+    """
+    print("\n== Name variants ==")
+    merged = name_variant_report(df)
+    path = os.path.join(outdir, f"name_variant_merges_{fy_window_slug()}.csv")
+    merged.to_csv(path, index=False)
+    print(f"  {len(merged):,} variant form(s) counted together -> {path}")
+
+    if not load_heading_crosswalk():
+        print(f"  [info] {HEADING_CROSSWALK_FILE} not found next to this script; "
+              "retired-heading checks skipped (hyphen/spacing checks still run)")
+    possible = possible_heading_variants(df)
+    path = os.path.join(outdir, f"possible_heading_variants_{fy_window_slug()}.csv")
+    possible.to_csv(path, index=False)
+    print(f"  {len(possible):,} possible variant(s) flagged for review -> {path}")
+    return merged, possible
 
 
 def run_weeding_candidates(df, outdir,
@@ -1318,6 +1750,7 @@ def main():
     run_lc_analysis(df, args.outdir)
     run_subject_analysis(df, args.outdir)
     run_geographic_analysis(df, args.outdir)
+    run_name_variant_report(df, args.outdir)
     run_weeding_candidates(df, args.outdir)
     if args.holdings:
         run_holdings_weeding(df, args.holdings, args.outdir)
