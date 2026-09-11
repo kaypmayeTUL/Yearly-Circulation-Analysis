@@ -113,6 +113,16 @@ policy might not have caught up with.
   online, or a real drop in interest?
 - The search box is the fastest way to check a specific topic before
   a curriculum-committee meeting.
+- Before acting on a big riser or decliner, open **🔎 possible heading
+  variants**. If a heading appears there with a "Match in data," the
+  topic's use is split between an old LC heading and its replacement:
+  a retired heading "declining" while its replacement "rises" is
+  recataloging, not a change in interest. Read the two rows together,
+  and pass the list to cataloging — each row is a set of records whose
+  headings may need updating.
+- Capitalization, character-encoding, and place-name differences are
+  already merged; the **🔗 variants counted together** expander shows
+  exactly what was combined.
 
 ### Geographic
 
@@ -127,9 +137,12 @@ research center focus areas).
 **How to act on it:**
 - Region-level chart for the high-altitude story: which world
   regions are your users engaging with?
-- Place-level for specific investigations — Louisiana holding steady
-  vs. New Orleans (bare) declining might just be a cataloging split
-  worth resolving, not a real decline.
+- Place-level for specific investigations. Variant forms of the same
+  place ("New Orleans", "New Orleans (La.)", "Louisiana--New Orleans")
+  are already counted together; open the 🔗 variants expander to see
+  exactly which forms were merged. Ambiguous bare names ("New York",
+  "Washington", "Portland") are left separate — if one of those moves
+  sharply, check the records before reading it as a trend.
 - Steep rises in a specific region often correlate with a new faculty
   hire, new program, or shifting current events.
 
