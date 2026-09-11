@@ -1,0 +1,18 @@
+old_heading,new_heading,change_type,year,source,note
+Aliens,Noncitizens,one-to-one,2021,https://loc.gov/aba/pcc/saco/cpsoed/psd-211115.html,
+Illegal aliens,Illegal immigration | Noncitizens,split,2021,https://loc.gov/aba/pcc/saco/cpsoed/psd-211115.html,LC split this heading; a work may belong under either or both.
+Aged,Older people,one-to-one,2004,https://www.loc.gov/catdir/cpso/wls04/awls0411.html,"""Aged"" is still a valid MeSH term. Check whether the heading came from MeSH before treating it as retired."
+Handicapped,People with disabilities,one-to-one,2001,https://www.loc.gov/catdir/cpso/wls01/awls0146.html,About 530 related headings changed the same way.
+Physically handicapped,People with disabilities,one-to-one,2001,https://www.loc.gov/catdir/cpso/wls01/awls0146.html,
+Handicapped children,Children with disabilities,one-to-one,2001,https://www.loc.gov/catdir/cpso/wls01/awls0146.html,
+Mentally handicapped,People with mental disabilities,one-to-one,2001,https://loc.gov/cds/notices/nothandicapped.html,
+Afro-Americans,African Americans,one-to-one,2000,https://loc.gov/cds/notices/notafro.html,
+Afro-American {x},African American {x},one-to-one,2000,https://loc.gov/cds/notices/notafro.html,"The adjectival qualifier changed at the same time (e.g., Afro-American women)."
+Blacks,Black people,one-to-one,,https://loc.gov/aba/pcc/saco/aframerfun.html,Change year isn't stated on the source page.
+Gypsies,Romanies,one-to-one,2000,https://update.lib.berkeley.edu/2013/06/14/library-of-congress-subject-headings-of-interest/,Secondary source (UC Berkeley Library).
+Cookery,Cooking | Cookbooks,split,2010,https://www.loc.gov/catdir/cpso/cooking3.pdf,Topical works use Cooking; recipe collections may carry the genre term Cookbooks.
+"Cookery, {x}",{x} cooking,one-to-one,2010,https://www.loc.gov/catdir/cpso/cooking3.pdf,"Inverted forms such as Cookery, Cajun."
+{x} cookery,{x} cooking,one-to-one,2010,https://www.loc.gov/catdir/cpso/cooking3.pdf,Direct forms such as Indian cookery. Confirm against the authority record.
+Moving-pictures,Motion pictures,one-to-one,1987,https://www.loc.gov/loc/lcib/9808/lcsh-lan.html,
+Aeroplanes,Airplanes,one-to-one,1970s,https://www.loc.gov/loc/lcib/9808/lcsh-lan.html,
+Water-closets,Toilets,one-to-one,1970s,https://www.loc.gov/loc/lcib/9808/lcsh-lan.html,
