@@ -34,8 +34,14 @@ from generate_library_analysis_fy23_26 import (  # noqa: E402
     _classify_geography_region,
     categorize_discipline,
     configure_fy_window,
+    configure_name_index,
     get_class,
     get_subclass,
+    heading_terms,
+    learn_name_index,
+    load_heading_crosswalk,
+    name_variant_report,
+    possible_heading_variants,
     normalize_title,
     parse_full_headings,
     parse_geographic_terms,
@@ -431,6 +437,89 @@ def load_holdings(file_bytes: bytes) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 
 @st.cache_data(show_spinner=False)
+def compute_name_index(df: pd.DataFrame):
+    """Place pairs and heading spellings learned from the full upload — see learn_name_index()."""
+    return learn_name_index(df["Subjects"])
+
+
+@st.cache_data(show_spinner=False)
+def compute_name_variants(df: pd.DataFrame) -> pd.DataFrame:
+    """Audit of heading/place forms counted under a canonical form."""
+    return name_variant_report(df)
+
+
+def render_name_variants(df: pd.DataFrame, kind: str, key: str) -> None:
+    """Expander listing the merges behind the numbers on this tab."""
+    report = compute_name_variants(df)
+    report = report[report["Type"] == kind]
+    noun = "heading" if kind == "Subject heading" else "place name"
+    with st.expander(f"🔗 {len(report):,} {noun} variant(s) counted together"):
+        if kind == "Subject heading":
+            detail = ("Merges cover place-name forms ('New Orleans--History' / "
+                      "'New Orleans (La.)--History'), capitalization, and character "
+                      "encoding — two spellings of 'Tremé' can look identical but be "
+                      "stored differently. Related or retired headings are never "
+                      "merged; see possible variants below.")
+        else:
+            detail = ("Ambiguous bare names such as 'New York', 'Washington', or "
+                      "'Portland' are never merged.")
+        st.caption(
+            f"Each row is a {noun} form found in the records that was counted "
+            f"under another form, so one real trend isn't split into two. {detail} "
+            "Titles and loans reflect the selected fiscal years."
+        )
+        if report.empty:
+            st.info("No variants merged for the current selection.")
+            return
+        st.dataframe(report.drop(columns="Type"), use_container_width=True, hide_index=True)
+        download_button_for_df(
+            report, "⬇ Download variant merges CSV",
+            f"name_variant_merges_{script.fy_window_slug()}.csv", key=key,
+        )
+
+
+@st.cache_data(show_spinner=False)
+def compute_possible_variants(df: pd.DataFrame) -> pd.DataFrame:
+    """Headings that may duplicate another heading — flagged, never merged."""
+    return possible_heading_variants(df)
+
+
+def render_possible_variants(df: pd.DataFrame) -> None:
+    """Expander listing retired-LC and hyphen/spacing variants for review."""
+    report = compute_possible_variants(df)
+    live = int((report["Match in data"] != "\u2014").sum()) if not report.empty else 0
+    with st.expander(f"🔎 {len(report):,} possible heading variant(s) to review "
+                     f"— not merged ({live:,} with both forms in use)"):
+        st.caption(
+            "These headings may describe the same topic as another heading, but "
+            "they are counted separately because only a person can confirm it. "
+            "'Retired LC heading' rows match headings the Library of Congress has "
+            "replaced; when 'Match in data' names a heading, use of that topic is "
+            "currently split across two rows, so read both trends together. "
+            "'(split)' means LC divided the old heading, so records must be "
+            "reviewed individually. Every row also points to records whose "
+            "headings may need updating."
+        )
+        if not load_heading_crosswalk():
+            st.warning(
+                "Retired-heading list (lcsh_heading_changes.csv) not found next to "
+                "the app, so only hyphen/spacing checks ran."
+            )
+        if report.empty:
+            st.info("No possible variants found for the current selection.")
+            return
+        st.dataframe(
+            report, use_container_width=True, hide_index=True,
+            column_config={"Source": st.column_config.LinkColumn("Source")},
+        )
+        download_button_for_df(
+            report, "⬇ Download possible variants CSV",
+            f"possible_heading_variants_{script.fy_window_slug()}.csv",
+            key="dl_possible_variants",
+        )
+
+
+@st.cache_data(show_spinner=False)
 def compute_lc_class_shifts(df: pd.DataFrame) -> pd.DataFrame:
     out = pivot_by_year(df, "LC_Class")
     out["Description"] = out["LC_Class"].map(
@@ -490,12 +579,11 @@ def split_heading_terms(heading: str) -> list[str]:
 
     'Politics and government--United States--19th century' becomes
     ['Politics and government', 'United States', '19th century'].
-    Kept local rather than imported so the dashboard doesn't depend on the
-    script gaining a term-splitter. Empty fragments are dropped.
+    Delegates to the script's heading_terms() so places come back in one
+    canonical form: 'Jazz--Louisiana--New Orleans' yields 'New Orleans (La.)',
+    the same term a 'New Orleans (La.)--History' heading contributes.
     """
-    if not isinstance(heading, str):
-        return []
-    return [part.strip(" .,") for part in heading.split("--") if part.strip(" .,")]
+    return heading_terms(heading)
 
 
 # Level metadata: the two granularities the Subjects × LC tab can work at.
@@ -632,6 +720,7 @@ def compute_subject_breadth(pairs: pd.DataFrame,
 @st.cache_data(show_spinner=False)
 def compute_geographic_shifts(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     df2 = df.copy()
+    df2["_row"] = np.arange(len(df2))
     df2["Geographies"] = df2["Subjects"].apply(parse_geographic_terms)
     exploded = df2.explode("Geographies").rename(columns={"Geographies": "Geography"})
     exploded = exploded[exploded["Geography"].notna() & (exploded["Geography"] != "")]
@@ -652,7 +741,9 @@ def compute_geographic_shifts(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFr
          "Absolute Change"]
     ]
 
-    region = pivot_by_year(exploded, "Region")
+    # One count per record per region — a record naming two places in the
+    # same region contributes its loans to that region once.
+    region = pivot_by_year(exploded.drop_duplicates(["_row", "Region"]), "Region")
     region = region[
         ["Region", *FY_COLS,
          "Mean Annual Loans", "Trend Slope (loans/yr)", "Trend R^2",
@@ -823,6 +914,7 @@ def compute_subject_snapshot(df: pd.DataFrame) -> pd.DataFrame:
 @st.cache_data(show_spinner=False)
 def compute_geo_snapshot(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     d = df.copy()
+    d["_row"] = np.arange(len(d))
     d["Geographies"] = d["Subjects"].apply(parse_geographic_terms)
     exploded = d.explode("Geographies").rename(columns={"Geographies": "Geography"})
     exploded = exploded[exploded["Geography"].notna() & (exploded["Geography"] != "")]
@@ -836,7 +928,8 @@ def compute_geo_snapshot(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
         .sort_values("Loans", ascending=False)
     )
     regions = (
-        exploded.groupby("Region")["Loans (In House + Not In House)"]
+        exploded.drop_duplicates(["_row", "Region"])
+        .groupby("Region")["Loans (In House + Not In House)"]
         .sum().reset_index().rename(columns={"Loans (In House + Not In House)": "Loans"})
         .sort_values("Loans", ascending=False)
     )
@@ -1091,6 +1184,15 @@ with st.sidebar:
             comparison. R² tells you how well the straight line actually fits
             the yearly points — trust the direction when R² is high, treat noisy
             trends as directional guidance rather than gospel.
+
+            **Name variants.** Place names written different ways — "New
+            Orleans", "New Orleans (La.)", "Louisiana--New Orleans" — are
+            counted as one place and one heading, so recataloging doesn't show
+            up as a fake decline in one form and a fake rise in the other.
+            Headings that differ only in capitalization or character encoding
+            are merged too. The 🔗 expanders list every merge. Headings LC has
+            retired, and near-duplicates, are only flagged (🔎 on the Subject
+            Headings tab), never merged.
             """
         )
 
@@ -1106,6 +1208,10 @@ try:
 except Exception as exc:
     st.error(f"Could not read circulation CSV: {exc}")
     st.stop()
+
+# Learn place pairs and heading spellings from the whole upload (not just the
+# selected years) so variant merging doesn't change with the FY selection.
+configure_name_index(compute_name_index(circ_full))
 
 holdings_df = None
 if holdings_file is not None:
@@ -1448,7 +1554,8 @@ with tabs["Subject Headings"]:
     else:
         st.subheader("Subject Heading Shifts (full LC headings)")
         st.caption("Full heading strings — 'Politics and government--United States' "
-                   "stays distinct from 'Politics and government--France'.")
+                   "stays distinct from 'Politics and government--France', while "
+                   "place-name variants of the same heading are counted together.")
         disc_choice = st.selectbox(
             "Filter by discipline",
             ["All disciplines"] + list(DISCIPLINE_ORDER),
@@ -1486,6 +1593,8 @@ with tabs["Subject Headings"]:
                                "⬇ Download subject-heading shifts CSV",
                                f"subject_term_shifts_{script.fy_window_slug()}.csv",
                                key="dl_subj")
+    render_name_variants(circ_df, "Subject heading", key="dl_variants_subj")
+    render_possible_variants(circ_df)
 
 # --- Subjects × LC ----------------------------------------------------------
 # Two questions, both phrased as "subject terms across LC":
@@ -1826,6 +1935,7 @@ with tabs["Geographic"]:
                     f"geographic_region_shifts_{script.fy_window_slug()}.csv",
                     key="dl_geo_r",
                 )
+    render_name_variants(circ_df, "Place", key="dl_variants_geo")
 
 # --- Weeding ----------------------------------------------------------------
 with tabs["Weeding"]:
